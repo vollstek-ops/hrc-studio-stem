@@ -687,14 +687,6 @@ body.app {
 
 /* ------------------------------------------------------------ responsive */
 
-/* Short laptop windows: compress the lanes before the list has to scroll, and
-   calm the shortcut strip so it never reads as a cropped lane. */
-@media (max-height: 880px) {
-  .track { padding: 5px 12px; }
-  .tracklist { gap: 6px; }
-  .shortcut-strip { opacity: 0.7; }
-}
-
 @media (max-width: 1100px) {
   #device-pill { display: none; }
   .app-name em { display: none; }
@@ -1334,3 +1326,19 @@ kbd {
 
 /* -------------------------------------------------------------- a11y/misc */
 
+/* Short laptop windows: compress the lanes before the list has to scroll, and
+   calm the shortcut strip so it never reads as a cropped lane. */
+@media (max-height: 880px) {
+  .track { padding: 5px 12px; }
+  .tracklist { gap: 6px; }
+  .shortcut-strip { opacity: 0.7; }
+}
+
+/* Very short windows (1280x800 class): the per-lane format line is the first
+   thing to go so all six lanes still fit without an inner scrollbar. */
+@media (max-height: 820px) {
+  .track { padding: 3px 12px; }
+  .track-meta { display: none; }
+  /* the lane canvas is what sets row height; 52px fits six lanes in 416px */
+  .track canvas.wave { height: 52px; }
+}
