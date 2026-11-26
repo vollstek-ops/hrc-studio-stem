@@ -178,6 +178,12 @@ def _get_separator(mode: str, quality: str = DEFAULT_QUALITY, extra_models_dir: 
         return separator
 
 
+def cache_stats() -> int:
+    """How many warm model instances are held (one per mode/quality pair)."""
+    with _cache_lock:
+        return len(_separator_cache)
+
+
 def drop_cache(mode: str | None = None) -> None:
     """Release warm models (used when memory pressure matters)."""
     with _cache_lock:

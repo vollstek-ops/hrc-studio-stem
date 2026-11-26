@@ -493,6 +493,23 @@ class JobManager:
         shutil.rmtree(job.dir, ignore_errors=True)
         return True
 
+    def protected_dirs(self) -> list[Path]:
+        """Job folders that must not be touched (queued or running work)."""
+        with self._lock:
+            return [job.dir for job in self._jobs.values() if job.status in {QUEUED, RUNNING}]
+
+    def sweep_now(self) -> list[str]:
+        """Delete every terminal job past its TTL immediately."""
+        cutoff = time.time() - JOB_TTL_HOURS * 3600
+        expired: list[str] = []
+        with self._lock:
+            for job_id, job in self._jobs.items():
+                if job.status in TERMINAL and (job.finished_at or job.created_at) < cutoff:
+                    expired.append(job_id)
+        for job_id in expired:
+            self.delete(job_id)
+        return expired
+
     def stem_path(self, job_id: str, slug: str) -> tuple[Path | None, str]:
         """Resolve a stem file, refusing anything that escapes the job folder."""
         job = self.get(job_id)
@@ -575,6 +592,8 @@ class JobManager:
             return
 
         def on_stage(name: str, fraction: float | None) -> None:
+            nonlocal last_tick
+            last_tick = time.time()
             if fraction is None:
                 job.update(stage=name)
             else:
@@ -583,12 +602,38 @@ class JobManager:
         def is_cancelled() -> bool:
             return job.cancel_requested
 
+        # Watchdog state: `last_tick` is touched by every real progress event
+        # from the separator (each inference chunk reports one). The GPU can
+        # deadlock inside torch/MPS (istft -> MPSStream sync) and hang the
+        # worker with 0% CPU; without this the job would spin forever.
+        last_tick = time.time()
+
         # Gentle creep so the bar never looks frozen while a chunk computes.
         stop_creep = threading.Event()
 
         def creep() -> None:
+            nonlocal last_tick
             while not stop_creep.wait(2.5):
-                if not job.cancel_requested and job.status == RUNNING and job.stage in {"Separating", "Loading model", "Decoding to 24-bit"}:
+                if job.cancel_requested or job.status != RUNNING:
+                    continue
+                if job.stage == "Separating" and time.time() - last_tick > 900:
+                    logger.error(
+                        "Job %s stalled: no inference progress for 15 minutes (likely a torch/MPS hang).",
+                        job.id,
+                    )
+                    job.update(
+                        status=ERROR,
+                        stage="Failed",
+                        error=(
+                            "Inference stalled on the GPU with no progress for 15 minutes "
+                            "(a known PyTorch/MPS hang). Re-run the separation — a retry usually "
+                            "completes. If it stalls again, restart the app to free the GPU."
+                        ),
+                    )
+                    job.persist()
+                    stop_creep.set()
+                    return
+                if job.stage in {"Separating", "Loading model", "Decoding to 24-bit"}:
                     ceiling = 0.78 if job.stage == "Separating" else 0.13
                     if job.progress < ceiling:
                         job.update(progress=min(ceiling, job.progress + 0.004))
