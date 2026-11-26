@@ -13,6 +13,7 @@ manager, so exactly one run owns the sink at a time.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from typing import Callable
 
@@ -23,15 +24,24 @@ _sink: ProgressSink | None = None
 _cancel_check: Callable[[], None] | None = None
 _installed = False
 
+# When a long file is separated in segments, the per-segment tqdm runs 0 -> 1
+# once per segment. The chunk context maps that onto the whole file so the UI
+# bar moves forwards across every segment instead of restarting each time.
+_chunk_index = 1
+_chunk_count = 1
+
 
 class CancelledError(RuntimeError):
     """Raised inside the inference loop when a job is cancelled."""
 
 
+_CHUNK_RE = re.compile(r"processing chunk (\d+)/(\d+)")
+
+
 class StageHandler(logging.Handler):
     """Turns `audio-separator`'s own log lines into coarse stage updates."""
 
-    def __init__(self, on_stage: Callable[[str], None]):
+    def __init__(self, on_stage: Callable[..., None]):
         super().__init__(level=logging.INFO)
         self._on_stage = on_stage
         self._last = ""
@@ -41,6 +51,18 @@ class StageHandler(logging.Handler):
             message = record.getMessage().lower()
         except Exception:  # noqa: BLE001 - a broken log line must never kill a job
             return
+
+        chunk = _CHUNK_RE.search(message)
+        if chunk:
+            index, count = int(chunk.group(1)), int(chunk.group(2))
+            set_chunk_context(index, count)
+            overall = (index - 1) / count if count > 1 else 0.0
+            try:
+                self._on_stage("Separating", 0.14 + 0.66 * overall)
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
         stage = None
         if "downloading" in message or "model file" in message:
             stage = "Downloading model"
@@ -118,6 +140,18 @@ def install() -> None:
         _installed = True
 
 
+def set_chunk_context(index: int, count: int) -> None:
+    """Tell the sink which segment is running (1-based) out of how many."""
+    global _chunk_index, _chunk_count
+    with _lock:
+        _chunk_index = max(1, index)
+        _chunk_count = max(1, count)
+
+
+def reset_chunk_context() -> None:
+    set_chunk_context(1, 1)
+
+
 def set_sink(sink: ProgressSink | None) -> None:
     global _sink
     with _lock:
@@ -151,6 +185,8 @@ __all__ = [
     "clear_sink",
     "detach_stage_handler",
     "install",
+    "reset_chunk_context",
     "set_cancel_check",
+    "set_chunk_context",
     "set_sink",
 ]

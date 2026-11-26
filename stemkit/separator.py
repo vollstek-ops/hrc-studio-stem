@@ -41,6 +41,11 @@ _cache_lock = threading.Lock()
 StageFn = Callable[[str, float | None], None]
 CancelFn = Callable[[], bool]
 
+# Segment length for MPS long-track chunking (seconds). Small enough to keep
+# Metal buffers well clear of the memory-pressure hang, large enough that the
+# per-chunk overhead stays negligible.
+MPS_CHUNK_SECONDS = 60
+
 # Reported once per process so the UI can show which accelerator is live.
 _device_report: dict | None = None
 
@@ -51,8 +56,10 @@ def device_report(refresh: bool = False) -> dict:
     if _device_report is not None and not refresh:
         return _device_report
 
+    forced = os.environ.get("STEM_DEVICE", "auto").lower()
     report = {
         "device": "cpu",
+        "requested": forced,
         "torch": None,
         "torch_version": None,
         "mps_built": False,
@@ -70,7 +77,10 @@ def device_report(refresh: bool = False) -> dict:
         report["mps_built"] = bool(torch.backends.mps.is_built())
         report["mps_available"] = bool(torch.backends.mps.is_available())
         report["cuda_available"] = bool(torch.cuda.is_available())
-        if report["cuda_available"]:
+        if forced == "cpu":
+            report["device"] = "cpu"
+            report["autocast"] = False
+        elif report["cuda_available"]:
             report["device"] = "cuda"
             report["torch_version"] = torch.version.cuda
         elif report["mps_available"]:
@@ -102,14 +112,22 @@ def _log_tail(exc: BaseException, limit: int = 3) -> str:
     return " — ".join(lines) or exc.__class__.__name__
 
 
-def _get_separator(mode: str, quality: str = DEFAULT_QUALITY, extra_models_dir: Path | None = None):
-    """Build (or reuse) an audio-separator Separator for a mode/quality pair."""
+def _get_separator(
+    mode: str,
+    quality: str = DEFAULT_QUALITY,
+    extra_models_dir: Path | None = None,
+    device: str = "auto",
+):
+    """Build (or reuse) an audio-separator Separator for a mode/quality/device pair."""
     import audio_separator
     from audio_separator.separator import Separator
 
     cfg = get_mode(mode)
     profile = get_quality(quality)
-    cache_key = (mode, profile["id"])
+    device = (device or "auto").lower()
+    if device == "auto":
+        device = device_report()["device"]
+    cache_key = (mode, profile["id"], device)
     with _cache_lock:
         cached = _separator_cache.get(cache_key)
         if cached is not None:
@@ -134,6 +152,30 @@ def _get_separator(mode: str, quality: str = DEFAULT_QUALITY, extra_models_dir: 
             mdxc_params=dict(profile["mdxc_params"]),
             demucs_params=dict(profile["demucs_params"]),
         )
+        if device == "cpu":
+            # Never touch the GPU: no autocast, no MPS forcing, no chunking.
+            separator_kwargs["use_autocast"] = False
+            separator = Separator(**separator_kwargs)
+            logger.info(
+                "audio-separator %s | mode=%s | quality=%s | device=cpu (forced) | model=%s",
+                getattr(audio_separator, "__version__", "?"),
+                mode,
+                profile["id"],
+                cfg["model"],
+            )
+            separator.load_model(model_filename=cfg["model"])
+            _separator_cache[cache_key] = separator
+            return separator
+
+        # On MPS, long tracks deadlock: the RoFormer decoder's istft ends with a
+        # synchronous scalar read on the Metal command queue, and once a full
+        # song's buffers are in flight that wait never completes (observed twice
+        # on a 5-minute track; every short clip was fine). Processing in 60 s
+        # segments keeps the GPU buffers small; the library stitches the chunks
+        # back together per stem. Short files are untouched (the chunker only
+        # engages when the audio is longer than the segment).
+        if device["device"] == "mps":
+            separator_kwargs["chunk_duration"] = MPS_CHUNK_SECONDS
         # Autocast (fp16 matmuls) is only meaningful on an accelerator.
         separator_kwargs["use_autocast"] = bool(device["autocast"])
 
@@ -223,6 +265,7 @@ def separate_file(
     job_dir: str | Path | None = None,
     *,
     quality: str = DEFAULT_QUALITY,
+    device: str = "auto",
     on_stage: StageFn | None = None,
     is_cancelled: CancelFn | None = None,
     stem_labels: list[str] | None = None,
@@ -272,14 +315,14 @@ def separate_file(
     # -- 2. Load model (cached after the first job) --------------------------
     stage("Loading model", 0.10)
     check_cancel()
-    separator = _get_separator(mode, profile["id"])
+    separator = _get_separator(mode, profile["id"], device=device)
 
     # -- 3. Inference --------------------------------------------------------
     stage("Separating", 0.14)
     progress.install()
     progress.set_sink(lambda fraction: stage("Separating", 0.14 + 0.66 * fraction))
     progress.set_cancel_check(check_cancel)
-    handler = progress.attach_stage_handler(lambda name: stage(name, None))
+    handler = progress.attach_stage_handler(lambda name, fraction=None: stage(name, fraction))
     try:
         # audio-separator delegates writing to the architecture instance, which
         # holds its own output_dir, so both have to be pointed at this job.
@@ -382,6 +425,7 @@ def separate_file(
         "mode_name": cfg["name"],
         "quality": profile["id"],
         "quality_name": profile["name"],
+        "device": (device or "auto").lower(),
         "model": cfg["model"],
         "model_label": cfg["model_label"],
         "stems": stems,

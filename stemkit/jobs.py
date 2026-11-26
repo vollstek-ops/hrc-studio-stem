@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import shutil
+import subprocess
+import sys
 import threading
 import time
 import unicodedata
@@ -74,6 +77,13 @@ STEP_ORDER = {
 }
 
 
+# A separation runs in a dedicated subprocess (see stemkit/worker.py). If the
+# GPU deadlocks, the parent kills the process and retries in a fresh one.
+MAX_HANG_RETRIES = 2
+HANG_TIMEOUT_SECONDS = 900.0  # no job.json progress for 15 min -> hung
+CANCEL_GRACE_SECONDS = 60.0   # worker gets this long to honour a cancel
+
+
 def safe_filename(name: str) -> str:
     """Strip directories, control characters and anything shell-hostile."""
     name = unicodedata.normalize("NFC", name or "")
@@ -106,11 +116,13 @@ class Job:
         size: int,
         quality: str = DEFAULT_QUALITY,
         source_url: str = "",
+        device: str = "auto",
     ):
         self.id = job_id
         self.mode = mode
         self.quality = quality
         self.source_url = source_url
+        self.device = device
         self.original_name = original_name
         self.size = size
         self.status = QUEUED
@@ -234,6 +246,7 @@ class Job:
                 "mode_name": cfg["name"],
                 "quality": self.quality,
                 "quality_name": get_quality(self.quality)["name"],
+                "device": self.device,
                 "source_kind": "url" if self.source_url else "upload",
                 "source_url": self.source_url,
                 "model": cfg["model"],
@@ -292,9 +305,26 @@ class Job:
                 }
                 for stem in self.stems
             ]
-            (self.dir / "job.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+            data["step_started"] = dict(self.step_started)
+            data["step_finished"] = dict(self.step_finished)
+            # The cancel flag may be set by the parent process after this
+            # process last wrote; never let a routine tick erase it.
+            data["cancel_requested"] = bool(self.cancel_requested or self.cancel_flag_on_disk())
+            payload = json.dumps(data, indent=2)
+            target = self.dir / "job.json"
+            tmp = target.with_suffix(".json.tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            os.replace(tmp, target)  # atomic: readers never see a partial file
         except Exception:  # noqa: BLE001 - persistence is best effort
             logger.debug("Could not persist job %s", self.id, exc_info=True)
+
+    def cancel_flag_on_disk(self) -> bool:
+        """Read the cancel flag back from job.json (set by the parent process)."""
+        try:
+            data = json.loads((self.dir / "job.json").read_text(encoding="utf-8"))
+            return bool(data.get("cancel_requested"))
+        except Exception:  # noqa: BLE001 - unreadable file simply means "no"
+            return False
 
 
 class JobManager:
@@ -307,13 +337,13 @@ class JobManager:
         self._stop = threading.Event()
 
     # -- lifecycle --------------------------------------------------------
-    def start(self) -> None:
+    def start(self, run_worker: bool = True, run_janitor: bool = True) -> None:
         WORK_DIR.mkdir(parents=True, exist_ok=True)
         self._load_existing()
-        if self._worker is None or not self._worker.is_alive():
+        if run_worker and (self._worker is None or not self._worker.is_alive()):
             self._worker = threading.Thread(target=self._run_forever, name="stem-worker", daemon=True)
             self._worker.start()
-        if self._janitor is None or not self._janitor.is_alive():
+        if run_janitor and (self._janitor is None or not self._janitor.is_alive()):
             self._janitor = threading.Thread(target=self._sweep_forever, name="stem-janitor", daemon=True)
             self._janitor.start()
 
@@ -337,10 +367,13 @@ class JobManager:
                     size=data.get("size", 0),
                     quality=data.get("quality", DEFAULT_QUALITY),
                     source_url=data.get("source_url", "") or "",
+                    device=data.get("device", "auto") or "auto",
                 )
                 job.status = data.get("status", DONE)
-                if job.status not in TERMINAL:
-                    # A crash mid-run: the audio may or may not be intact.
+                if job.status not in TERMINAL and not os.environ.get("STEM_WORKER_SPAWNED"):
+                    # A crash mid-run: the audio may or may not be intact. A
+                    # spawned worker loads a RUNNING job on purpose, so this
+                    # rule is for real restarts only.
                     job.status, job.stage, job.error = ERROR, "Interrupted", "Server restarted during separation."
                 job.stage = data.get("stage", job.stage)
                 job.progress = float(data.get("progress", 0.0))
@@ -482,6 +515,7 @@ class JobManager:
         if job is None or job.status in TERMINAL:
             return False
         job.update(cancel_requested=True, stage="Cancelling", message="Stopping after the current chunk")
+        job.persist()  # the worker process reads the flag from disk
         return True
 
     def delete(self, job_id: str) -> bool:
@@ -533,11 +567,142 @@ class JobManager:
             if job is None:
                 continue
             try:
-                self._execute(job)
+                self._execute_in_subprocess(job)
             except Exception:  # noqa: BLE001 - a job must never kill the worker
                 logger.exception("Unexpected failure in job %s", job_id)
                 job.update(status=ERROR, stage="Failed", error="Unexpected internal error. See server logs.")
                 job.persist()
+
+    def _execute_in_subprocess(self, job: Job) -> None:
+        """Run one job in `python -m stemkit.worker`, watching for a GPU hang.
+
+        The worker reports progress by rewriting `job.json`; this process tails
+        that file so the API keeps serving live progress. If the worker stops
+        reporting (torch/MPS deadlock) it is killed and the job is retried in a
+        fresh process — a new Metal allocator, no inherited fragmentation.
+        """
+        job.update(
+            status=RUNNING,
+            started_at=job.started_at or time.time(),
+            stage="Fetching audio" if job.source_url else "Starting",
+            progress=0.01,
+        )
+        job.persist()
+
+        root = Path(__file__).resolve().parent.parent
+        command = [sys.executable, "-m", "stemkit.worker", job.id]
+        env = dict(os.environ, PYTHONUNBUFFERED="1", STEM_WORKER_SPAWNED="1")
+
+        attempt = 0
+        while attempt <= MAX_HANG_RETRIES:
+            attempt += 1
+            log_path = job.dir / "worker.log"
+            hung = False
+            last_change = time.time()
+            cancel_sent_at: float | None = None
+            with open(log_path, "ab") as log_handle:
+                proc = subprocess.Popen(
+                    command,
+                    cwd=root,
+                    env=env,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                )
+                while proc.poll() is None:
+                    time.sleep(1.5)
+                    self._sync_from_disk(job)
+
+                    if job.cancel_requested:
+                        cancel_sent_at = cancel_sent_at or time.time()
+                        if time.time() - cancel_sent_at > CANCEL_GRACE_SECONDS:
+                            logger.warning("Job %s: worker did not honour cancel, killing it", job.id)
+                            proc.kill()
+                            break
+
+                    try:
+                        mtime = (job.dir / "job.json").stat().st_mtime
+                    except OSError:
+                        mtime = 0.0
+                    if job.status in TERMINAL:
+                        # The worker reported a final state but its process is
+                        # still alive (a blocked inference thread cannot exit).
+                        logger.warning("Job %s: worker reported %s but would not exit; reaping it", job.id, job.status)
+                        proc.kill()
+                        break
+
+                    if mtime > last_change:
+                        last_change = mtime
+                    elif time.time() - last_change > HANG_TIMEOUT_SECONDS:
+                        logger.error(
+                            "Job %s: worker made no progress for %.0f minutes — killing it (attempt %d/%d)",
+                            job.id, HANG_TIMEOUT_SECONDS / 60, attempt, MAX_HANG_RETRIES + 1,
+                        )
+                        proc.kill()
+                        hung = True
+                        break
+
+            proc.wait()
+            self._sync_from_disk(job)
+
+            if job.status in TERMINAL:
+                return
+
+            if hung and attempt <= MAX_HANG_RETRIES:
+                logger.warning("Job %s: retrying in a fresh GPU context (attempt %d/%d)", job.id, attempt + 1, MAX_HANG_RETRIES + 1)
+                job.update(
+                    status=RUNNING,
+                    stage="Retrying on a fresh GPU context",
+                    message=f"GPU stall detected — retrying (attempt {attempt + 1} of {MAX_HANG_RETRIES + 1})",
+                )
+                job.persist()
+                continue
+
+            if hung:
+                job.update(
+                    status=ERROR,
+                    stage="Failed",
+                    error=(
+                        "The GPU stalled repeatedly during inference and the job could not be "
+                        "completed after retries. Try again later, or use a shorter track."
+                    ),
+                )
+                job.persist()
+                return
+
+            job.update(
+                status=ERROR,
+                stage="Failed",
+                error=f"The separation process exited unexpectedly (code {proc.returncode}). See worker.log.",
+            )
+            job.persist()
+            return
+
+    def _sync_from_disk(self, job: Job) -> None:
+        """Mirror worker-written job.json into this process's Job object."""
+        try:
+            data = json.loads((job.dir / "job.json").read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - mid-write or missing file: keep current state
+            return
+        with job._lock:
+            job.status = data.get("status", job.status)
+            job.stage = data.get("stage", job.stage)
+            job.progress = float(data.get("progress", job.progress))
+            job.message = data.get("message", job.message)
+            job.error = data.get("error", job.error)
+            job.duration = float(data.get("duration") or job.duration)
+            job.elapsed = float(data.get("elapsed") or job.elapsed)
+            job.original_name = data.get("filename", job.original_name)
+            job.size = int(data.get("size") or job.size)
+            job.cancel_requested = job.cancel_requested or bool(data.get("cancel_requested"))
+            if data.get("finished_at") and job.finished_at is None:
+                job.finished_at = data["finished_at"]
+            job.step_started.update({k: v for k, v in (data.get("step_started") or {}).items()})
+            job.step_finished.update({k: v for k, v in (data.get("step_finished") or {}).items()})
+            if data.get("stems") and not job.stems:
+                job.stems = [
+                    stem for stem in data["stems"]
+                    if stem.get("path") and Path(stem["path"]).exists()
+                ]
 
     def _fetch_source(self, job: Job) -> bool:
         """Download the job's link. Returns False when the job already ended."""
@@ -546,6 +711,7 @@ class JobManager:
         def on_progress(fraction: float) -> None:
             # The download is the first 5% of the overall job.
             job.update(progress=min(0.05, 0.005 + 0.045 * max(0.0, min(1.0, fraction))))
+            job.persist()
 
         try:
             info = youtube.download(
@@ -579,6 +745,10 @@ class JobManager:
         job.persist()
         return True
 
+    def execute_job(self, job: Job) -> None:
+        """Run a job to completion in THIS process (used by stemkit.worker)."""
+        self._execute(job)
+
     def _execute(self, job: Job) -> None:
         job.update(
             status=RUNNING,
@@ -598,9 +768,10 @@ class JobManager:
                 job.update(stage=name)
             else:
                 job.update(stage=name, progress=min(0.99, max(job.progress, fraction)))
+            job.persist()  # the parent tails job.json for live progress
 
         def is_cancelled() -> bool:
-            return job.cancel_requested
+            return job.cancel_requested or job.cancel_flag_on_disk()
 
         # Watchdog state: `last_tick` is touched by every real progress event
         # from the separator (each inference chunk reports one). The GPU can
@@ -633,10 +804,8 @@ class JobManager:
                     job.persist()
                     stop_creep.set()
                     return
-                if job.stage in {"Separating", "Loading model", "Decoding to 24-bit"}:
-                    ceiling = 0.78 if job.stage == "Separating" else 0.13
-                    if job.progress < ceiling:
-                        job.update(progress=min(ceiling, job.progress + 0.004))
+                # No synthetic progress: the parent tails real ticks from
+                # job.json, so the bar only ever moves for real work.
 
         creep_thread = threading.Thread(target=creep, name=f"creep-{job.id}", daemon=True)
         creep_thread.start()
@@ -653,6 +822,7 @@ class JobManager:
                 job.mode,
                 job.dir,
                 quality=job.quality,
+                device=job.device,
                 on_stage=on_stage,
                 is_cancelled=is_cancelled,
             )

@@ -23,6 +23,10 @@ MAX_UPLOAD_BYTES = int(os.environ.get("STEM_MAX_UPLOAD_MB", "500")) * 1024 * 102
 # Jobs older than this are swept away (with their audio) by the janitor.
 JOB_TTL_HOURS = float(os.environ.get("STEM_JOB_TTL_HOURS", "12"))
 
+# Force the inference device: "auto" (default) picks MPS/CUDA when present,
+# "cpu" never touches the GPU. Set STEM_DEVICE=cpu to work around GPU hangs.
+STEM_DEVICE = os.environ.get("STEM_DEVICE", "auto").lower()
+
 # Only one separation runs at a time: these models are RAM hungry and
 # PyTorch is already using every core it is given.
 MAX_CONCURRENT_JOBS = 1
