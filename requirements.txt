@@ -12,3 +12,4 @@ audio-separator[cpu]>=0.48.0,<0.50
 # --- audio I/O -------------------------------------------------------------
 soundfile>=0.12.1                # 24-bit PCM WAV verification and writing
 numpy>=1.26                      # waveform peak computation
+yt-dlp==2026.10.21

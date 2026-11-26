@@ -19,7 +19,14 @@ import uuid
 from pathlib import Path
 
 from . import audio, progress
-from .config import ACCEPTED_EXTENSIONS, JOB_TTL_HOURS, WORK_DIR, get_mode
+from .config import (
+    ACCEPTED_EXTENSIONS,
+    DEFAULT_QUALITY,
+    JOB_TTL_HOURS,
+    WORK_DIR,
+    get_mode,
+    get_quality,
+)
 from .separator import separate_file
 
 logger = logging.getLogger("stemkit.jobs")
@@ -34,6 +41,10 @@ TERMINAL = {DONE, ERROR, CANCELLED}
 
 # The fixed pipeline every separation walks through. The UI draws these as
 # steps with a live state, so the ids must stay stable.
+PIPELINE_FETCH: list[tuple[str, str]] = [
+    ("fetch", "Fetching audio"),
+]
+
 PIPELINE: list[tuple[str, str]] = [
     ("decode", "Decoding to 24-bit"),
     ("model", "Loading model"),
@@ -45,6 +56,7 @@ PIPELINE: list[tuple[str, str]] = [
 # `audio-separator` emits its own stage names through a log handler; map every
 # name we know onto one pipeline step.
 STAGE_STEPS = {
+    "Fetching audio": "fetch",
     "Starting": "decode",
     "Decoding to 24-bit": "decode",
     "Loading model": "model",
@@ -56,7 +68,10 @@ STAGE_STEPS = {
     "Cancelling": "separate",
 }
 
-STEP_ORDER = {step_id: index for index, (step_id, _) in enumerate(PIPELINE)}
+STEP_ORDER = {
+    step_id: index
+    for index, (step_id, _) in enumerate(PIPELINE_FETCH + [step for step in PIPELINE if step[0] != "fetch"])
+}
 
 
 def safe_filename(name: str) -> str:
@@ -82,9 +97,20 @@ def sanitize_stem_filename(name: str) -> str:
 
 
 class Job:
-    def __init__(self, job_id: str, *, mode: str, original_name: str, size: int):
+    def __init__(
+        self,
+        job_id: str,
+        *,
+        mode: str,
+        original_name: str,
+        size: int,
+        quality: str = DEFAULT_QUALITY,
+        source_url: str = "",
+    ):
         self.id = job_id
         self.mode = mode
+        self.quality = quality
+        self.source_url = source_url
         self.original_name = original_name
         self.size = size
         self.status = QUEUED
@@ -127,20 +153,28 @@ class Job:
                 self._close_steps(self.finished_at)
 
     # -- pipeline timing --------------------------------------------------
+    def pipeline(self) -> list[tuple[str, str]]:
+        return PIPELINE_FETCH + PIPELINE if self.source_url else PIPELINE
+
     def _enter_step(self, stage: str) -> None:
         step = STAGE_STEPS.get(stage)
         if step is None or step == self.step:
             return
         now = time.time()
-        index = STEP_ORDER[step]
+        # index within *this job's* pipeline: URL jobs carry an extra first step
+        order = [step_id for step_id, _ in self.pipeline()]
+        if step not in order:
+            return
+        index = order.index(step)
         self._close_steps(now, before=index, fill_skipped=True)
         self.step_started.setdefault(step, now)
         self.step_finished.pop(step, None)
         self.step = step
 
     def _close_steps(self, when: float, before: int | None = None, *, fill_skipped: bool = False) -> None:
-        limit = len(PIPELINE) if before is None else before
-        for step_id, _ in PIPELINE[:limit]:
+        steps = self.pipeline()
+        limit = len(steps) if before is None else before
+        for step_id, _ in steps[:limit]:
             if step_id not in self.step_started:
                 # A step we never saw (e.g. a warm cached model) is not a lie:
                 # it took no meaningful time, so record it as instantaneous.
@@ -152,7 +186,7 @@ class Job:
 
     def _step_payload(self) -> list[dict]:
         payload = []
-        for step_id, label in PIPELINE:
+        for step_id, label in self.pipeline():
             started = self.step_started.get(step_id)
             finished = self.step_finished.get(step_id)
             if self.status == DONE:
@@ -198,6 +232,10 @@ class Job:
                 "status": self.status,
                 "mode": self.mode,
                 "mode_name": cfg["name"],
+                "quality": self.quality,
+                "quality_name": get_quality(self.quality)["name"],
+                "source_kind": "url" if self.source_url else "upload",
+                "source_url": self.source_url,
                 "model": cfg["model"],
                 "model_label": cfg["model_label"],
                 "filename": self.original_name,
@@ -292,7 +330,14 @@ class JobManager:
                 continue
             try:
                 data = json.loads(meta.read_text(encoding="utf-8"))
-                job = Job(data["id"], mode=data["mode"], original_name=data["filename"], size=data.get("size", 0))
+                job = Job(
+                    data["id"],
+                    mode=data["mode"],
+                    original_name=data["filename"],
+                    size=data.get("size", 0),
+                    quality=data.get("quality", DEFAULT_QUALITY),
+                    source_url=data.get("source_url", "") or "",
+                )
                 job.status = data.get("status", DONE)
                 if job.status not in TERMINAL:
                     # A crash mid-run: the audio may or may not be intact.
@@ -345,8 +390,10 @@ class JobManager:
         filename: str,
         source_path: str | Path,
         size: int | None = None,
+        quality: str = DEFAULT_QUALITY,
     ) -> Job:
         get_mode(mode)  # raises ValueError for unknown modes
+        profile = get_quality(quality)  # ... and for unknown qualities
         job_id = uuid.uuid4().hex[:12]
         original = sanitize_stem_filename(filename or "audio.wav")
         suffix = Path(original).suffix.lower()
@@ -356,7 +403,13 @@ class JobManager:
                 + ", ".join(sorted(ACCEPTED_EXTENSIONS))
             )
 
-        job = Job(job_id, mode=mode, original_name=original, size=int(size or 0))
+        job = Job(
+            job_id,
+            mode=mode,
+            original_name=original,
+            size=int(size or 0),
+            quality=profile["id"],
+        )
         job.dir.mkdir(parents=True, exist_ok=True)
         job.input_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -371,10 +424,49 @@ class JobManager:
         self._queue.put(job.id)
         return job
 
-    def submit_existing(self, *, mode: str, source_path: str | Path) -> Job:
+    def submit_url(
+        self,
+        *,
+        url: str,
+        mode: str,
+        quality: str = DEFAULT_QUALITY,
+    ) -> Job:
+        """Queue a job whose audio still has to be fetched from a link."""
+        get_mode(mode)
+        profile = get_quality(quality)
+        job_id = uuid.uuid4().hex[:12]
+        job = Job(
+            job_id,
+            mode=mode,
+            original_name="fetched audio.wav",
+            size=0,
+            quality=profile["id"],
+            source_url=url,
+        )
+        job.dir.mkdir(parents=True, exist_ok=True)
+        job.input_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            self._jobs[job.id] = job
+        job.persist()
+        self._queue.put(job.id)
+        return job
+
+    def submit_existing(
+        self,
+        *,
+        mode: str,
+        source_path: str | Path,
+        quality: str = DEFAULT_QUALITY,
+    ) -> Job:
         """Submit a file that already lives somewhere on disk (CLI use)."""
         source = Path(source_path)
-        return self.submit(mode=mode, filename=source.name, source_path=source, size=source.stat().st_size)
+        return self.submit(
+            mode=mode,
+            filename=source.name,
+            source_path=source,
+            size=source.stat().st_size,
+            quality=quality,
+        )
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:
@@ -430,9 +522,57 @@ class JobManager:
                 job.update(status=ERROR, stage="Failed", error="Unexpected internal error. See server logs.")
                 job.persist()
 
-    def _execute(self, job: Job) -> None:
-        job.update(status=RUNNING, started_at=time.time(), stage="Starting", progress=0.01)
+    def _fetch_source(self, job: Job) -> bool:
+        """Download the job's link. Returns False when the job already ended."""
+        from . import youtube  # local import: yt-dlp is an optional dependency
+
+        def on_progress(fraction: float) -> None:
+            # The download is the first 5% of the overall job.
+            job.update(progress=min(0.05, 0.005 + 0.045 * max(0.0, min(1.0, fraction))))
+
+        try:
+            info = youtube.download(
+                job.source_url,
+                job.input_path.parent,
+                on_progress=on_progress,
+                is_cancelled=lambda: job.cancel_requested,
+            )
+        except youtube.FetchCancelled:
+            job.update(status=CANCELLED, stage="Cancelled", progress=0.0, message="Download cancelled")
+            job.persist()
+            return False
+        except youtube.FetchError as exc:
+            logger.warning("Could not fetch %s: %s", job.source_url, exc)
+            job.update(status=ERROR, stage="Failed", error=str(exc)[:2000])
+            job.persist()
+            return False
+        except Exception as exc:  # noqa: BLE001 - never kill the worker
+            logger.exception("Unexpected fetch failure for %s", job.source_url)
+            job.update(status=ERROR, stage="Failed", error=f"Could not fetch that link: {exc}"[:2000])
+            job.persist()
+            return False
+
+        job.update(
+            original_name=info["path"].name,
+            size=int(info.get("bytes") or 0),
+            duration=float(info.get("duration") or 0),
+            progress=0.05,
+            stage="Starting",
+        )
         job.persist()
+        return True
+
+    def _execute(self, job: Job) -> None:
+        job.update(
+            status=RUNNING,
+            started_at=time.time(),
+            stage="Fetching audio" if job.source_url else "Starting",
+            progress=0.01,
+        )
+        job.persist()
+
+        if job.source_url and not self._fetch_source(job):
+            return
 
         def on_stage(name: str, fraction: float | None) -> None:
             if fraction is None:
@@ -467,6 +607,7 @@ class JobManager:
                 job.input_path,
                 job.mode,
                 job.dir,
+                quality=job.quality,
                 on_stage=on_stage,
                 is_cancelled=is_cancelled,
             )

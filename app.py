@@ -28,13 +28,17 @@ from stemkit import __version__, audio
 from stemkit.config import (
     ACCEPTED_EXTENSIONS,
     DEFAULT_MODE,
+    DEFAULT_QUALITY,
     MAX_UPLOAD_BYTES,
     MODEL_DIR,
     get_mode,
+    get_quality,
     public_modes,
+    public_qualities,
 )
 from stemkit.jobs import DONE, manager, safe_filename, sanitize_stem_filename
-from stemkit.separator import drop_cache
+from stemkit.separator import device_report, drop_cache
+from stemkit.youtube import available as youtube_available, validate_url as validate_youtube_url
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
@@ -58,12 +62,17 @@ async def lifespan(_: FastAPI):
     if not audio.have_ffmpeg():
         logger.warning("ffmpeg not found on PATH — uploads other than WAV/FLAC will fail.")
     manager.start()
+    report = device_report()
     logger.info(
-        "HRC Studio Stem %s ready · models in %s · uploads limited to %d MB",
+        "HRC Studio Stem %s ready · device=%s (torch %s) · models in %s · uploads limited to %d MB",
         __version__,
+        report["device"],
+        report.get("torch") or "not installed",
         MODEL_DIR,
         MAX_UPLOAD_BYTES // (1024 * 1024),
     )
+    if report.get("mps_selftest") is False:
+        logger.warning("MPS is advertised but failed its self-test; inference will run on CPU.")
     try:
         yield
     finally:
@@ -101,18 +110,44 @@ async def favicon() -> FileResponse:
 
 @app.get("/api/health")
 async def health() -> dict:
+    device = device_report()
     return {
         "ok": True,
         "version": __version__,
         "ffmpeg": audio.have_ffmpeg(),
         "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
         "accepted_extensions": sorted(ACCEPTED_EXTENSIONS),
+        "quality_default": DEFAULT_QUALITY,
+        "device": device["device"],
+        "device_label": {
+            "mps": "Apple Silicon MPS",
+            "cuda": "CUDA",
+            "cpu": "CPU",
+        }.get(device["device"], device["device"]),
+        "torch": device.get("torch"),
+        "mps_available": device.get("mps_available", False),
+        "autocast": device.get("autocast", False),
+        "youtube": youtube_available(),
     }
 
 
 @app.get("/api/modes")
 async def modes() -> dict:
-    return {"default": DEFAULT_MODE, "modes": public_modes()}
+    return {
+        "default": DEFAULT_MODE,
+        "modes": public_modes(),
+        "quality_default": DEFAULT_QUALITY,
+        "qualities": public_qualities(),
+    }
+
+
+@app.get("/api/qualities")
+async def qualities() -> dict:
+    return {
+        "default": DEFAULT_QUALITY,
+        "qualities": public_qualities(),
+        "device": device_report().get("device", "cpu"),
+    }
 
 
 @app.get("/api/jobs")
@@ -132,10 +167,15 @@ async def create_job(
     request: Request,
     file: UploadFile = File(...),
     mode: str = Form(default=DEFAULT_MODE),
+    quality: str = Form(default=DEFAULT_QUALITY),
 ) -> JSONResponse:
     base = _base_url(request)
     if mode not in {item["id"] for item in public_modes()}:
         raise HTTPException(status_code=400, detail=f"Unknown mode {mode!r}.")
+    try:
+        quality_profile = get_quality(quality)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     filename = safe_filename(file.filename or "audio.wav")
     suffix = Path(filename).suffix.lower()
@@ -162,7 +202,13 @@ async def create_job(
                 handle.write(chunk)
         if written == 0:
             raise HTTPException(status_code=400, detail="The uploaded file is empty.")
-        job = manager.submit(mode=mode, filename=filename, source_path=tmp_path, size=written)
+        job = manager.submit(
+            mode=mode,
+            filename=filename,
+            source_path=tmp_path,
+            size=written,
+            quality=quality_profile["id"],
+        )
     except HTTPException:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
@@ -177,6 +223,41 @@ async def create_job(
         await file.close()
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    return JSONResponse(status_code=201, content=job.snapshot(base))
+
+
+@app.post("/api/jobs/from-url", status_code=201)
+async def create_job_from_url(request: Request, payload: dict = Body(...)) -> JSONResponse:
+    """Queue a separation for audio fetched from a public link (yt-dlp)."""
+    base = _base_url(request)
+    payload = payload if isinstance(payload, dict) else {}
+
+    if not youtube_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Link fetching needs yt-dlp. Run `pip install yt-dlp` and restart the app.",
+        )
+
+    mode = str(payload.get("mode") or DEFAULT_MODE)
+    if mode not in {item["id"] for item in public_modes()}:
+        raise HTTPException(status_code=400, detail=f"Unknown mode {mode!r}.")
+
+    try:
+        quality_profile = get_quality(str(payload.get("quality") or DEFAULT_QUALITY))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        url = validate_youtube_url(str(payload.get("url") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        job = manager.submit_url(url=url, mode=mode, quality=quality_profile["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    logger.info("queued %s from %s (mode=%s, quality=%s)", job.id, url, mode, quality_profile["name"])
     return JSONResponse(status_code=201, content=job.snapshot(base))
 
 
