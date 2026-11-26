@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import platform
 import re
 import shutil
 import threading
@@ -10,20 +12,75 @@ import time
 from pathlib import Path
 from typing import Callable
 
+# Must be set before torch is imported anywhere in the process: on MPS a few
+# ops (complex STFT helpers) have no Metal kernel, and without this flag the run
+# dies instead of quietly falling back to CPU for that one op.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 from . import audio, progress
-from .config import MODEL_DIR, WORK_DIR, get_mode, slugify_stem
+from .config import DEFAULT_QUALITY, MODEL_DIR, WORK_DIR, get_mode, get_quality, slugify_stem
 
 logger = logging.getLogger("stemkit.separator")
 
 _STEM_IN_NAME = re.compile(r"_\(([^)]+)\)_")
 
 # Model instances are expensive to build (they hold weights in RAM), so each
-# mode keeps one warm instance between jobs.
-_separator_cache: dict[str, object] = {}
+# mode/quality pair keeps one warm instance between jobs. Studio and Fast use
+# different chunking, so they cannot share an instance.
+_separator_cache: dict[tuple[str, str], object] = {}
 _cache_lock = threading.Lock()
 
 StageFn = Callable[[str, float | None], None]
 CancelFn = Callable[[], bool]
+
+# Reported once per process so the UI can show which accelerator is live.
+_device_report: dict | None = None
+
+
+def device_report(refresh: bool = False) -> dict:
+    """What PyTorch will actually use: 'mps', 'cuda' or 'cpu'."""
+    global _device_report
+    if _device_report is not None and not refresh:
+        return _device_report
+
+    report = {
+        "device": "cpu",
+        "torch": None,
+        "torch_version": None,
+        "mps_built": False,
+        "mps_available": False,
+        "cuda_available": False,
+        "autocast": False,
+        "processor": platform.uname().processor,
+        "machine": platform.uname().machine,
+        "fallback_env": os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", ""),
+    }
+    try:
+        import torch
+
+        report["torch"] = torch.__version__
+        report["mps_built"] = bool(torch.backends.mps.is_built())
+        report["mps_available"] = bool(torch.backends.mps.is_available())
+        report["cuda_available"] = bool(torch.cuda.is_available())
+        if report["cuda_available"]:
+            report["device"] = "cuda"
+            report["torch_version"] = torch.version.cuda
+        elif report["mps_available"]:
+            report["device"] = "mps"
+            # Prove the device really works instead of trusting the flag.
+            try:
+                probe = torch.ones(8, device="mps") * 2
+                report["mps_selftest"] = float(probe.sum().item()) == 16.0
+            except Exception as exc:  # noqa: BLE001 - a broken MPS is worth knowing
+                report["mps_selftest"] = False
+                report["device"] = "cpu"
+                report["error"] = str(exc)[:200]
+        report["autocast"] = report["device"] in {"mps", "cuda"}
+    except Exception as exc:  # noqa: BLE001 - torch is optional at import time
+        report["error"] = str(exc)[:200]
+
+    _device_report = report
+    return report
 
 
 def _log_tail(exc: BaseException, limit: int = 3) -> str:
@@ -37,20 +94,23 @@ def _log_tail(exc: BaseException, limit: int = 3) -> str:
     return " — ".join(lines) or exc.__class__.__name__
 
 
-def _get_separator(mode: str, extra_models_dir: Path | None = None):
-    """Build (or reuse) an audio-separator Separator for a mode."""
+def _get_separator(mode: str, quality: str = DEFAULT_QUALITY, extra_models_dir: Path | None = None):
+    """Build (or reuse) an audio-separator Separator for a mode/quality pair."""
     import audio_separator
     from audio_separator.separator import Separator
 
     cfg = get_mode(mode)
+    profile = get_quality(quality)
+    cache_key = (mode, profile["id"])
     with _cache_lock:
-        cached = _separator_cache.get(mode)
+        cached = _separator_cache.get(cache_key)
         if cached is not None:
             return cached
 
         ModelDir = extra_models_dir or MODEL_DIR
         ModelDir.mkdir(parents=True, exist_ok=True)
 
+        device = device_report()
         separator_kwargs = dict(
             log_level=logging.INFO,
             model_file_dir=str(ModelDir),
@@ -60,27 +120,53 @@ def _get_separator(mode: str, extra_models_dir: Path | None = None):
             amplification_threshold=0.0,
             sample_rate=44100,
             use_soundfile=True,  # keeps memory flat on long tracks
+            # Explicit chunking: these are the knobs that decide speed.
+            mdx_params=dict(profile["mdx_params"]),
+            vr_params=dict(profile["vr_params"]),
+            mdxc_params=dict(profile["mdxc_params"]),
+            demucs_params=dict(profile["demucs_params"]),
         )
-        # Prefer accelerated inference when the machine supports it. Both flags
-        # are mutually exclusive, and audio-separator warns + falls back to fp32
-        # when a combination is unsupported, so this is always safe.
-        try:
-            import torch
-
-            if torch.backends.mps.is_available() or torch.cuda.is_available():
-                separator_kwargs["use_autocast"] = True
-        except Exception:  # noqa: BLE001
-            pass
+        # Autocast (fp16 matmuls) is only meaningful on an accelerator.
+        separator_kwargs["use_autocast"] = bool(device["autocast"])
 
         separator = Separator(**separator_kwargs)
+        chosen = getattr(getattr(separator, "torch_device", None), "type", "cpu")
+
+        # audio-separator only turns MPS on when platform.uname().processor is
+        # literally "arm"; on any other Apple Silicon setup it silently runs on
+        # CPU. Verify, and take the GPU when the hardware clearly has one.
+        if device["device"] == "mps" and chosen != "mps":
+            try:
+                import torch
+
+                separator.torch_device = torch.device("mps")
+                separator.torch_device_mps = separator.torch_device
+                logger.warning(
+                    "audio-separator picked %s although MPS is available; forcing MPS.", chosen
+                )
+                chosen = "mps"
+            except Exception:  # noqa: BLE001 - staying on CPU is still correct
+                logger.exception("Could not switch torch to MPS; continuing on CPU.")
+
         logger.info(
-            "audio-separator %s | mode=%s | model=%s",
+            "audio-separator %s | mode=%s | quality=%s | device=%s | model=%s",
             getattr(audio_separator, "__version__", "?"),
             mode,
+            profile["id"],
+            chosen,
             cfg["model"],
         )
+
         separator.load_model(model_filename=cfg["model"])
-        _separator_cache[mode] = separator
+        logger.info(
+            "inference ready · device=%s · autocast=%s · batch=%s · roformer_overlap=%s · demucs_shifts=%s",
+            chosen,
+            separator_kwargs["use_autocast"],
+            profile["batch_size"],
+            profile["mdxc_params"].get("overlap"),
+            profile["demucs_params"].get("shifts"),
+        )
+        _separator_cache[cache_key] = separator
         return separator
 
 
@@ -89,8 +175,14 @@ def drop_cache(mode: str | None = None) -> None:
     with _cache_lock:
         if mode is None:
             _separator_cache.clear()
-        else:
-            _separator_cache.pop(mode, None)
+            return
+        for key in [key for key in _separator_cache if key[0] == mode]:
+            _separator_cache.pop(key, None)
+
+
+def warm_cache(mode: str, quality: str = DEFAULT_QUALITY) -> None:
+    """Load a model up front so the first job does not pay for it."""
+    _get_separator(mode, quality)
 
 
 def _point_at(separator, out_dir: Path) -> None:
@@ -116,6 +208,7 @@ def separate_file(
     mode: str,
     job_dir: str | Path | None = None,
     *,
+    quality: str = DEFAULT_QUALITY,
     on_stage: StageFn | None = None,
     is_cancelled: CancelFn | None = None,
     stem_labels: list[str] | None = None,
@@ -126,10 +219,12 @@ def separate_file(
         {mode, model, stems: [{name, slug, path, bytes, duration, bit_depth, ...}],
          duration, elapsed}
 
+    `quality` selects the chunking profile (`studio` or `fast`).
     `on_stage(name, fraction)` is called on stage transitions and on every
     inference progress tick. `is_cancelled()` is polled between chunks.
     """
     cfg = get_mode(mode)
+    profile = get_quality(quality)
     input_path = Path(input_path)
     if not input_path.exists():
         raise audio.AudioError(f"Input file not found: {input_path}")
@@ -163,7 +258,7 @@ def separate_file(
     # -- 2. Load model (cached after the first job) --------------------------
     stage("Loading model", 0.10)
     check_cancel()
-    separator = _get_separator(mode)
+    separator = _get_separator(mode, profile["id"])
 
     # -- 3. Inference --------------------------------------------------------
     stage("Separating", 0.14)
@@ -267,6 +362,8 @@ def separate_file(
     return {
         "mode": mode,
         "mode_name": cfg["name"],
+        "quality": profile["id"],
+        "quality_name": profile["name"],
         "model": cfg["model"],
         "model_label": cfg["model_label"],
         "stems": stems,

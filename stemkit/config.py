@@ -113,6 +113,77 @@ def public_modes() -> list[dict]:
     ]
 
 
+
+# --------------------------------------------------------------------------- #
+# Quality profiles (speed vs. separation quality)
+# --------------------------------------------------------------------------- #
+# `audio-separator` exposes one config dict per architecture. Only the dict for
+# the architecture a mode actually uses changes anything:
+#   * 2stem  -> BS-RoFormer -> `mdxc_params` (overlap = prediction windows per
+#               chunk: 8 is the model default, 4 halves the inference passes)
+#   * 6stem  -> HTDemucs    -> `demucs_params` (shifts = averaged predictions,
+#               overlap = window overlap)
+# `mdx_params` / `vr_params` are passed through for the MDX and VR families so
+# the presets stay correct if a mode ever points at those architectures.
+
+QUALITIES: dict[str, dict] = {
+    "studio": {
+        "id": "studio",
+        "name": "Studio",
+        "tagline": "Reference separation",
+        "description": (
+            "Full overlap, single-chunk batches, all Demucs shifts. Slowest and "
+            "cleanest — use it for the take you keep."
+        ),
+        "batch_size": 1,
+        "mdx_params": {"hop_length": 1024, "segment_size": 256, "overlap": 0.25, "batch_size": 1},
+        "vr_params": {"batch_size": 1, "window_size": 512},
+        "mdxc_params": {"segment_size": 256, "batch_size": 1, "overlap": 8},
+        "demucs_params": {"segment_size": "Default", "shifts": 2, "overlap": 0.25},
+        "default": True,
+    },
+    "fast": {
+        "id": "fast",
+        "name": "Fast",
+        "tagline": "Rehearsal speed",
+        "description": (
+            "Batched chunks on the GPU and fewer overlapping windows. Rougher "
+            "edges on bleed and reverb tails — best for practising the part."
+        ),
+        "batch_size": 4,
+        "mdx_params": {"hop_length": 1024, "segment_size": 256, "overlap": 0.25, "batch_size": 4},
+        "vr_params": {"batch_size": 4, "window_size": 512},
+        "mdxc_params": {"segment_size": 256, "batch_size": 4, "overlap": 4},
+        "demucs_params": {"segment_size": "Default", "shifts": 1, "overlap": 0.1},
+        "default": False,
+    },
+}
+
+DEFAULT_QUALITY = next(item for item, cfg in QUALITIES.items() if cfg["default"])
+
+
+def get_quality(quality: str) -> dict:
+    """Return a quality profile, raising a clear error for an unknown one."""
+    try:
+        return QUALITIES[quality]
+    except KeyError:
+        valid = ", ".join(sorted(QUALITIES))
+        raise ValueError(f"Unknown quality {quality!r}. Choose one of: {valid}") from None
+
+
+def public_qualities() -> list[dict]:
+    return [
+        {
+            "id": cfg["id"],
+            "name": cfg["name"],
+            "tagline": cfg["tagline"],
+            "description": cfg["description"],
+            "batch_size": cfg["batch_size"],
+            "default": cfg["default"],
+        }
+        for cfg in QUALITIES.values()
+    ]
+
 # --------------------------------------------------------------------------- #
 # Stem presentation
 # --------------------------------------------------------------------------- #
