@@ -55,6 +55,122 @@ body.app {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
+/* --------------------------------------------------------------- splash */
+
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(900px 520px at 20% 8%, rgba(110, 231, 255, 0.12), transparent 60%),
+    radial-gradient(800px 480px at 84% 92%, rgba(167, 139, 250, 0.12), transparent 62%),
+    #06080c;
+  transition: opacity 0.45s ease, visibility 0.45s ease;
+}
+
+/* the whole splash promotes to its own compositor layer so nothing under it
+   repaints while the intro animation runs */
+.splash, .splash-inner { will-change: opacity, transform; }
+
+.splash[hidden] { display: none; }
+.splash.is-done { opacity: 0; visibility: hidden; pointer-events: none; }
+
+.splash-inner { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+
+/* The glow sits on a static wrapper: animating an element that also carries a
+   drop-shadow filter makes Chrome re-raster the SVG every frame, which reads
+   as shivering. Transform-only on a composited layer stays smooth. */
+.splash-mark-wrap {
+  display: block;
+  filter: drop-shadow(0 0 22px rgba(110, 231, 255, 0.35));
+  animation: splash-float 2.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+.splash-mark { width: 74px; height: 74px; display: block; }
+
+@keyframes splash-float {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -5px, 0); }
+}
+
+.splash-word {
+  font-size: 17px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.splash-word em {
+  font-style: normal;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin-left: 3px;
+}
+
+.splash-bars { display: flex; align-items: flex-end; gap: 4px; height: 26px; }
+
+.splash-bars span {
+  width: 5px;
+  border-radius: 2.5px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  transform-origin: bottom;  /* pulse from the baseline, like an equaliser */
+  will-change: transform, opacity;
+  animation: splash-bar 1.1s ease-in-out infinite;
+}
+
+.splash-bars span:nth-child(1) { height: 42%; animation-delay: 0s; }
+.splash-bars span:nth-child(2) { height: 78%; animation-delay: 0.14s; }
+.splash-bars span:nth-child(3) { height: 100%; animation-delay: 0.28s; }
+.splash-bars span:nth-child(4) { height: 66%; animation-delay: 0.42s; }
+.splash-bars span:nth-child(5) { height: 46%; animation-delay: 0.56s; }
+
+@keyframes splash-bar {
+  0%, 100% { transform: scale3d(1, 0.4, 1); opacity: 0.55; }
+  50% { transform: scale3d(1, 1, 1); opacity: 1; }
+}
+
+.splash-note {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #5c6a7d;
+}
+
+/* ----------------------------------------------------------------- toast */
+
+.toast {
+  position: fixed;
+  top: calc(var(--bar-h) + 10px);
+  right: clamp(10px, 1.6vw, 20px);
+  z-index: 60;
+  max-width: min(420px, 90vw);
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  background: rgba(11, 15, 22, 0.97);
+  color: #b8e9cf;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  box-shadow: 0 22px 44px -22px rgba(0, 0, 0, 0.95);
+  animation: toast-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.toast[hidden] { display: none; }
+.toast[data-kind="warn"] { border-color: rgba(248, 113, 113, 0.35); color: #fca5a5; }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+
+/* cache button busy state */
+.ghost-icon.is-busy { color: var(--accent); border-color: rgba(110, 231, 255, 0.4); background: rgba(110, 231, 255, 0.1); }
+.ghost-icon.is-busy svg { animation: ring-spin 0.9s linear infinite; }
+
 /* -------------------------------------------------------------- app bar */
 
 .appbar {

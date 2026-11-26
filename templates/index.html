@@ -11,6 +11,30 @@
 <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body class="app">
+<div class="splash" id="splash" role="status" aria-live="polite" aria-label="Loading HRC Studio Stem">
+  <div class="splash-inner">
+    <span class="splash-mark-wrap" aria-hidden="true"><svg class="splash-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2.6c3.9 0 8 2.2 8 6.7 0 4.6-5.1 10.4-8 12.4-2.9-2-8-7.8-8-12.4 0-4.5 4.1-6.7 8-6.7z"
+            fill="url(#splashPick)" stroke="rgba(110,231,255,.6)" stroke-width="1.1"/>
+      <g fill="#08121b" fill-opacity="0.85">
+        <rect x="7.4" y="10.4" width="1.5" height="3.6" rx="0.75"/>
+        <rect x="10.1" y="7.6" width="1.5" height="9.2" rx="0.75"/>
+        <rect x="12.8" y="9" width="1.5" height="6.4" rx="0.75"/>
+        <rect x="15.5" y="8.2" width="1.5" height="8" rx="0.75"/>
+      </g>
+      <defs>
+        <linearGradient id="splashPick" x1="4" y1="3" x2="20" y2="22">
+          <stop offset="0" stop-color="#6ee7ff"/><stop offset="1" stop-color="#a78bfa"/>
+        </linearGradient>
+      </defs>
+    </svg></span>
+    <div class="splash-word">HRC <em>Studio Stem</em></div>
+    <div class="splash-bars" aria-hidden="true">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <p class="splash-note" id="splash-note">loading the studio…</p>
+  </div>
+</div>
 <div class="grain" aria-hidden="true"></div>
 
 <!-- ============================================================ app bar -->
@@ -50,6 +74,14 @@
   </div>
 
   <div class="appbar-right">
+    <button class="ghost-icon" id="cache-btn" type="button"
+            title="Clear caches — frees model memory, rebuildable ZIPs and temp files"
+            aria-label="Clear caches">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-9 0 1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M10 11v6m4-6v6"
+              fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
     <span class="status-dot" id="engine-dot" role="img" aria-label="engine status"></span>
     <button class="btn ghost small" id="recent-btn" type="button" aria-expanded="false" aria-controls="recent-menu">
       Recent
@@ -221,6 +253,7 @@
   </section>
 </main>
 
+<div class="toast" id="toast" hidden></div>
 <script src="/static/app.js" defer></script>
 </body>
 </html>
