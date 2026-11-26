@@ -24,6 +24,8 @@
 
 <img src="assets/preview.png" alt="HRC Studio Stem — practice studio with master transport, stem lanes and level meters" width="860" />
 
+*Six lossless stems on one shared timeline — transport, A–B loop, per-stem faders, meters and solo.*
+
 </div>
 
 Split any track into **lossless 24-bit WAV** stems, locally, with a desktop-style web
@@ -117,6 +119,10 @@ python app.py
 ```
 
 Open **<http://127.0.0.1:8000>**.
+
+<img src="assets/preview-new-track.png" alt="HRC Studio Stem entry screen with the 2 Stem / 6 Stem mode tabs and upload / YouTube source tabs" width="860" />
+
+*The entry screen: pick 2 or 6 stems in the header, then upload a file or paste a YouTube link.*
 
 1. Pick a mode (`2 Stem` or `6 Stem`) and a quality preset in the header.
 2. Drag a track onto the drop zone — or paste a YouTube link on the **YouTube link** tab

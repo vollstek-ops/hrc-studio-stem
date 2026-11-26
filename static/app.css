@@ -687,6 +687,14 @@ body.app {
 
 /* ------------------------------------------------------------ responsive */
 
+/* Short laptop windows: compress the lanes before the list has to scroll, and
+   calm the shortcut strip so it never reads as a cropped lane. */
+@media (max-height: 880px) {
+  .track { padding: 5px 12px; }
+  .tracklist { gap: 6px; }
+  .shortcut-strip { opacity: 0.7; }
+}
+
 @media (max-width: 1100px) {
   #device-pill { display: none; }
   .app-name em { display: none; }
@@ -1088,6 +1096,9 @@ input[type="range"]::-moz-range-thumb {
   flex: 1 1 auto;
   min-height: 120px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
   padding: 4px 4px 4px 0;
   border-radius: 12px;
   border: 1px dashed rgba(255, 255, 255, 0.06);
@@ -1104,7 +1115,9 @@ input[type="range"]::-moz-range-thumb {
   grid-template-columns: 176px minmax(0, 1fr) 240px;
   gap: 12px;
   align-items: center;
-  padding: 10px 12px;
+  /* 7px of padding keeps six lanes inside a 900px-tall window without the
+     library needing its own scrollbar (84px lanes fell 36px short). */
+  padding: 7px 12px;
   border-radius: 12px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.022);
