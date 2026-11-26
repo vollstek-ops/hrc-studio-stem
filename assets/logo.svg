@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 260" width="1040" height="260" role="img" aria-label="HRC Studio Stem — 24-bit multi-track stem practice studio">
+  <title>HRC Studio Stem</title>
+  <desc>Guitar pick with an audio waveform beside the HRC Studio Stem wordmark.</desc>
+
+  <defs>
+    <linearGradient id="hrc-card" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#0b1018"/>
+      <stop offset="0.55" stop-color="#0d141d"/>
+      <stop offset="1" stop-color="#101a26"/>
+    </linearGradient>
+    <linearGradient id="hrc-pick" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6ee7ff"/>
+      <stop offset="0.52" stop-color="#8fdcff"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="hrc-word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#9cf3ff"/>
+      <stop offset="0.55" stop-color="#a9c8ff"/>
+      <stop offset="1" stop-color="#c4b5fd"/>
+    </linearGradient>
+    <linearGradient id="hrc-eq" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6ee7ff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0.05"/>
+    </linearGradient>
+    <radialGradient id="hrc-glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#6ee7ff" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#6ee7ff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="hrc-card-clip">
+      <rect x="1" y="1" width="1038" height="258" rx="32"/>
+    </clipPath>
+  </defs>
+
+  <!-- card: the banner carries its own dark surface so it stays crisp and
+       legible on a light README as well as a dark one -->
+  <g clip-path="url(#hrc-card-clip)">
+    <rect x="1" y="1" width="1038" height="258" rx="32" fill="url(#hrc-card)"/>
+    <ellipse cx="150" cy="86" rx="360" ry="230" fill="url(#hrc-glow)"/>
+    <ellipse cx="980" cy="210" rx="300" ry="200" fill="url(#hrc-glow)" opacity="0.55"/>
+
+    <!-- decorative equaliser, right edge -->
+    <g fill="url(#hrc-eq)" opacity="0.85">
+      <rect x="836" y="150" width="7" height="46" rx="3.5"/>
+      <rect x="853" y="132" width="7" height="82" rx="3.5"/>
+      <rect x="870" y="112" width="7" height="122" rx="3.5"/>
+      <rect x="887" y="146" width="7" height="54" rx="3.5"/>
+      <rect x="904" y="96" width="7" height="154" rx="3.5"/>
+      <rect x="921" y="128" width="7" height="90" rx="3.5"/>
+      <rect x="938" y="104" width="7" height="138" rx="3.5"/>
+      <rect x="955" y="140" width="7" height="66" rx="3.5"/>
+      <rect x="972" y="118" width="7" height="110" rx="3.5"/>
+      <rect x="989" y="156" width="7" height="34" rx="3.5"/>
+    </g>
+  </g>
+
+  <!-- card border drawn on top so it stays crisp at any scale -->
+  <rect x="1" y="1" width="1038" height="258" rx="32" fill="none" stroke="#6ee7ff" stroke-opacity="0.22" stroke-width="2"/>
+
+  <!-- emblem: guitar pick with a waveform cut through it -->
+  <g transform="translate(64 58)">
+    <path d="M76 4 C110 4 148 18 148 62 C148 108 110 168 76 186 C42 168 4 108 4 62 C4 18 42 4 76 4 Z"
+          fill="url(#hrc-pick)"/>
+    <path d="M76 4 C110 4 148 18 148 62 C148 108 110 168 76 186 C42 168 4 108 4 62 C4 18 42 4 76 4 Z"
+          fill="none" stroke="#eafaff" stroke-opacity="0.55" stroke-width="2"/>
+    <g fill="#08121b" fill-opacity="0.82">
+      <rect x="34" y="78" width="8" height="32" rx="4"/>
+      <rect x="50" y="62" width="8" height="64" rx="4"/>
+      <rect x="66" y="46" width="8" height="96" rx="4"/>
+      <rect x="82" y="58" width="8" height="72" rx="4"/>
+      <rect x="98" y="72" width="8" height="44" rx="4"/>
+      <rect x="114" y="64" width="8" height="60" rx="4"/>
+    </g>
+  </g>
+
+  <!-- wordmark -->
+  <text x="248" y="126" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="56" letter-spacing="1.2">
+    <tspan font-weight="800" fill="#eef6ff">HRC</tspan><tspan font-weight="500" fill="url(#hrc-word)"> Studio Stem</tspan>
+  </text>
+
+  <!-- rule + subline -->
+  <rect x="250" y="152" width="132" height="3" rx="1.5" fill="url(#hrc-pick)"/>
+  <text x="250" y="192" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.5" letter-spacing="4.4" fill="#8496aa">24-BIT MULTI-TRACK PRACTICE STUDIO</text>
+</svg>

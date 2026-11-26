@@ -1,10 +1,32 @@
-# HRC Studio Stem
+<div align="center">
 
-**Studio-quality multi-track stem extraction and a practice studio, by [Vollstek](https://github.com/vollstek-ops).**
+<img src="assets/logo.svg" alt="HRC Studio Stem — 24-bit multi-track practice studio" width="680" />
 
-Repo: <https://github.com/vollstek-ops/hrc-studio-stem>
+### *Split any track into lossless 24-bit stems, then practise in a multi-track studio.*
 
-Split any track into **lossless 24-bit WAV** stems, locally, with a drag-and-drop web
+**Built by the HRC Jamming Crew · <https://github.com/vollstek-ops/hrc-studio-stem>**
+
+[![Stars](https://img.shields.io/github/stars/vollstek-ops/hrc-studio-stem?style=flat-square&logo=github&labelColor=0b0f16&color=6ee7ff)](https://github.com/vollstek-ops/hrc-studio-stem/stargazers)
+[![Forks](https://img.shields.io/github/forks/vollstek-ops/hrc-studio-stem?style=flat-square&logo=github&labelColor=0b0f16&color=a78bfa)](https://github.com/vollstek-ops/hrc-studio-stem/forks)
+[![License](https://img.shields.io/github/license/vollstek-ops/hrc-studio-stem?style=flat-square&labelColor=0b0f16)](https://github.com/vollstek-ops/hrc-studio-stem/blob/master/LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=0b0f16)](https://www.python.org/)
+[![Output](https://img.shields.io/badge/output-24--bit%20PCM%20WAV-34d399?style=flat-square&labelColor=0b0f16)](#5--why-the-output-is-really-24-bit)
+
+[Requirements](#1--requirements) ·
+[Setup](#2--setup) ·
+[Run the app](#3--run-the-web-app) ·
+[Practice studio](#3--run-the-web-app) ·
+[CLI](#4--run-the-cli) ·
+[24-bit](#5--why-the-output-is-really-24-bit) ·
+[API](#6--http-api) ·
+[Config](#7--configuration) ·
+[Troubleshooting](#9--troubleshooting)
+
+<img src="assets/preview.png" alt="HRC Studio Stem — practice studio with master transport, stem lanes and level meters" width="860" />
+
+</div>
+
+Split any track into **lossless 24-bit WAV** stems, locally, with a desktop-style web
 UI and a matching CLI. Built on [`audio-separator`](https://github.com/nomadkaraoke/python-audio-separator)
 (BS-RoFormer + HTDemucs) and FastAPI.
 
@@ -79,11 +101,12 @@ python app.py
 
 Open **<http://127.0.0.1:8000>**.
 
-1. Pick a mode (`2 Stem` or `6 Stem`).
-2. Drag a track onto the drop zone (or click to browse).
-3. Watch the pipeline: *Decoding → Loading model → Separating → Writing → Finalising*, each
-   step with its own state and time, plus a live percentage and ETA.
-4. The stems open in a practice studio — a master transport over one shared timeline:
+1. Pick a mode (`2 Stem` or `6 Stem`) and a quality preset in the header.
+2. Drag a track onto the drop zone — or paste a YouTube link on the **YouTube link** tab
+   (`yt-dlp` does the fetching; public links up to 20 minutes).
+3. Watch the loader: a progress ring with the live pipeline — *Fetching → Decoding →
+   Loading model → Separating → Writing → Finalising* — plus an ETA.
+4. The stems open in the practice studio — a master transport over one shared timeline:
 
 | Control | What it does |
 | --- | --- |
@@ -102,6 +125,19 @@ a click means the same instant on every row.
 A bounce is a true summing bus (`amix` with `normalize=0`): with the faders at unity it
 reconstructs the original mix, one muted stem is `-∞`, and a fader at 50 % is exactly
 `-6.0 dB`. Bounces live in `work/<job>/bounces/` and the newest six are kept.
+
+### Quality presets
+
+| Preset | What changes | Measured on Apple Silicon (MPS) |
+| --- | --- | --- |
+| **Studio** | full RoFormer overlap (8), single-chunk batches, Demucs `shifts=2` | reference |
+| **Fast** | `batch_size=4`, RoFormer overlap 4, Demucs `shifts=1` / `overlap=0.1` | **1.76× faster** (2 stem) · **2.73× faster** (6 stem) |
+
+Fast trades a little separation detail for rehearsal speed; the presets only touch the
+chunking knobs of the architecture a mode actually uses (`mdx_params` / `vr_params` are
+passed through for the MDX and VR families). Inference runs on **Apple Silicon MPS** when
+`torch.backends.mps.is_available()` — the app verifies the device with a real tensor op at
+startup and shows it in the header.
 
 Finished results are addressable: `http://127.0.0.1:8000/?job=<job id>` reopens that
 session's stems (the URL updates itself after every run), so a reload never loses your work.
