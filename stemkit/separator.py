@@ -226,7 +226,7 @@ def separate_file(
             logger.warning("Could not verify 24-bit subtype for %s: %s", dest.name, exc)
 
         info = audio.probe(dest)
-        peak_list = audio.peaks(dest, buckets=220)
+        peak_list = audio.peaks(dest, buckets=480)
         stems.append(
             {
                 "name": name,
