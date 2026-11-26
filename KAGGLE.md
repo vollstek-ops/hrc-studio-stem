@@ -99,6 +99,38 @@ from stemkit import youtube
 path = youtube.download("https://www.youtube.com/watch?v=...", "/kaggle/working/input")["path"]
 ```
 
+## 3b · Batch a whole album folder
+
+Kaggle is happiest with folders of files, so batching is the natural mode there:
+
+```bash
+# every track in an attached dataset folder, 6 stems, skip tracks already done
+python cli.py /kaggle/input/my-album/*.mp3 --mode 6stem --out /kaggle/working/stems
+
+# keep one stem per track (the others are deleted — saves disk on long albums)
+python cli.py /kaggle/input/my-album/*.flac --single-stem Vocals --out /kaggle/working/stems
+```
+
+The notebook's *Batch a whole album folder* cell does the same in Python, and additionally:
+
+- walks nested folders (`rglob`) for mp3/wav/flac/m4a/aac/ogg/opus
+- **skips tracks whose output folder already has WAVs**, so a rerun after a session restart
+  resumes instead of starting over
+- writes `/kaggle/working/stems/manifest.json` listing every file produced, with bit depth,
+  sample rate and size
+- with `SINGLE_STEM` set, deletes the unwanted stems per track instead of filtering the report
+  (on a 20 GB disk, keeping 6 stems of a 30-track album will not fit)
+
+To keep the results permanently, commit the output as a dataset:
+
+```bash
+# one-time: put your API token at ~/.kaggle/kaggle.json
+kaggle datasets create -p /kaggle/working/stems -r zip \
+    --dataset-slug your-user/my-separated-stems
+```
+
+Or download the WAVs from the session's *Output* tab before shutting it down.
+
 ## 4 · Run the studio UI through a tunnel
 
 Kaggle does not expose ports, so bind the app publicly and tunnel it:

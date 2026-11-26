@@ -143,11 +143,20 @@ def main(argv: list[str] | None = None) -> int:
         stems = result["stems"]
         if args.single_stem:
             wanted = args.single_stem.lower()
-            stems = [s for s in stems if wanted in s["name"].lower()]
-            if not stems:
+            kept = [s for s in stems if wanted in s["name"].lower()]
+            if not kept:
                 print(f"   no stem matched {args.single_stem!r}", file=sys.stderr)
                 failures += 1
                 continue
+            # "keep only one stem" means the others are discarded, not just
+            # hidden from the report.
+            for stem in stems:
+                if stem not in kept:
+                    try:
+                        Path(stem["path"]).unlink(missing_ok=True)
+                    except OSError as exc:
+                        print(f"   could not remove {stem['filename']}: {exc}", file=sys.stderr)
+            stems = kept
 
         for stem in stems:
             print(
