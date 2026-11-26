@@ -204,9 +204,18 @@ Output layout (`./separated/<track name>/`):
 
 ```
 separated/My Song/
-├── vocals.wav
-└── instrumental.wav          # 6stem mode produces drums/bass/guitar/piano/other too
+├── Vocals.wav
+└── Instrumental.wav          # 6stem mode produces Drums/Bass/Guitar/Piano/Other too
 ```
+
+### On Kaggle or another cloud GPU
+
+Nothing here is macOS-specific — on NVIDIA hardware the engine uses CUDA automatically
+(and skips the MPS chunking). Free GPU hours are enough for song-length work:
+
+- Step-by-step guide: **[KAGGLE.md](KAGGLE.md)**
+- Copy-paste notebook: **[`kaggle_quickstart.ipynb`](kaggle_quickstart.ipynb)** — install check,
+  GPU verification, separation, and the studio UI behind a tunnel
 
 Underneath, each mode is the corresponding `audio-separator` call, e.g.:
 
@@ -274,6 +283,7 @@ are built from.
 | `STEM_RELOAD` | off | `1` enables auto-reload |
 | `STEM_MODEL_DIR` | `./models` | model cache |
 | `STEM_WORK_DIR` | `./work` | per-job inputs/outputs |
+| `STEM_DEVICE` | `auto` | `auto` uses CUDA/MPS when present; `cpu` never touches the GPU (slower, but immune to GPU driver hangs) |
 | `STEM_MAX_UPLOAD_MB` | `500` | upload rejection threshold |
 | `STEM_JOB_TTL_HOURS` | `12` | finished jobs (and their audio) are swept after this |
 | `STEM_LOG_LEVEL` | `INFO` | app log level |
@@ -296,7 +306,12 @@ stem/
 │   ├── audio.py            ffprobe/ffmpeg probing, 24-bit decode/verify, peaks
 │   ├── progress.py         real per-chunk progress out of audio-separator's tqdm
 │   ├── separator.py        one file in → stems + manifest out
-│   └── jobs.py             single-worker queue, state, cancel, janitor
+│   ├── jobs.py             queue, state, cancel, janitor, subprocess supervision
+│   ├── worker.py           `python -m stemkit.worker <id>`: one job, one process
+│   ├── youtube.py          yt-dlp source fetching with limits and cancel
+│   └── maintenance.py      cache clearing and expired-job pruning
+├── KAGGLE.md               running it on a free cloud GPU
+├── kaggle_quickstart.ipynb copy-paste Kaggle notebook
 ├── models/                 downloaded checkpoints (git-ignored)
 └── work/                   per-job scratch space (git-ignored)
 ```
