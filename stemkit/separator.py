@@ -18,7 +18,15 @@ from typing import Callable
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 from . import audio, progress
-from .config import DEFAULT_QUALITY, MODEL_DIR, WORK_DIR, get_mode, get_quality, slugify_stem
+from .config import (
+    DEFAULT_QUALITY,
+    MODEL_DIR,
+    WORK_DIR,
+    canonical_stem_name,
+    get_mode,
+    get_quality,
+    slugify_stem,
+)
 
 logger = logging.getLogger("stemkit.separator")
 
@@ -308,9 +316,13 @@ def separate_file(
 
         match = _STEM_IN_NAME.search(raw_path.stem)
         name = match.group(1) if match else raw_path.stem.split("_")[-1]
+        # Label the stem by what it is, not by how the model spelled it:
+        # "no_vocals", "Accompaniment" and "Instrumental" all become the mode's
+        # canonical name, and the file on disk is named after it.
+        name = canonical_stem_name(name, mode) or name.strip()
         slug = slugify_stem(name)
 
-        dest = _unique_dest(stems_dir, slug)
+        dest = _unique_dest(stems_dir, name)
         if dest != raw_path:
             shutil.move(str(raw_path), str(dest))
 

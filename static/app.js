@@ -1708,6 +1708,16 @@
           <span class="h-tag">${stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
         `;
         if (job.status === "done" && job.stems.length) {
+          const zip = document.createElement("a");
+          zip.className = "menu-dl";
+          zip.href = job.download_all_url || `/api/jobs/${job.id}/download-all`;
+          zip.setAttribute("download", "");
+          zip.title = `Download all ${job.stems.length} stems as a ZIP`;
+          zip.setAttribute("aria-label", `Download stems for ${job.filename}`);
+          zip.innerHTML =
+            '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10m0 0l4-4m-4 4l-4-4M5 18h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>';
+          item.appendChild(zip);
+
           const open = document.createElement("button");
           open.type = "button";
           open.className = "btn ghost small";

@@ -1146,6 +1146,22 @@ kbd {
 .history .h-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history .h-tag { font-family: var(--mono); font-size: 10px; color: var(--muted); white-space: nowrap; }
 .history .h-name { font-size: 12px; }
+
+.menu-dl {
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.menu-dl:hover { color: var(--accent); border-color: rgba(110, 231, 255, 0.45); background: rgba(110, 231, 255, 0.08); }
+.menu-dl svg { width: 13px; height: 13px; }
+.history .btn { margin-left: 0; }
 .history .h-status { font-family: var(--mono); font-size: 10.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
 .history .h-status.done { color: var(--accent-3); border-color: rgba(52, 211, 153, 0.3); }
 .history .h-status.error { color: var(--danger); border-color: rgba(248, 113, 113, 0.3); }

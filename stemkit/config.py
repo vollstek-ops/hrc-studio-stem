@@ -210,6 +210,43 @@ STEM_COLORS = {
 }
 
 
+# Model outputs are not always spelled the way we present them; map the common
+# aliases onto the canonical stem names so a stem is always labelled by what it
+# actually is (Vocals, Guitar, ...) rather than by the model's file naming.
+STEM_ALIASES = {
+    "no-vocals": "instrumental",
+    "accompaniment": "instrumental",
+    "accompaniment-track": "instrumental",
+    "music": "instrumental",
+    "no-drums": "instrumental",
+    "no-bass": "instrumental",
+    "no-other": "instrumental",
+    "vocals-instrumental": "instrumental",
+    "electric-guitar": "guitar",
+    "rhythm-guitar": "guitar",
+    "lead-guitar": "guitar",
+    "acoustic-guitar": "guitar",
+    "keys": "piano",
+    "synth": "piano",
+    "strings": "other",
+    "percussion": "drums",
+}
+
+
+def canonical_stem_name(raw_name: str, mode: str) -> str | None:
+    """Resolve a model's stem label onto the mode's canonical stem name.
+
+    Returns None when the output is not one of the mode's declared stems, so
+    unexpected extras keep their model-provided name instead of being renamed.
+    """
+    slug = slugify_stem(raw_name)
+    slug = STEM_ALIASES.get(slug, slug)
+    for wanted in get_mode(mode)["stems"]:
+        if slugify_stem(wanted) == slug:
+            return wanted
+    return None
+
+
 def slugify_stem(name: str) -> str:
     slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in name).strip("-")
     while "--" in slug:
