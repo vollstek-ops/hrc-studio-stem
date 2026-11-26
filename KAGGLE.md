@@ -9,17 +9,35 @@ Click *Copy & Edit* on Kaggle, set **Accelerator = GPU** and **Internet = On**, 
 
 ---
 
-## 1 · Get the code into the notebook session
+## 1 · Get the code into the notebook session (Kaggle dataset)
 
-Pick whichever is convenient:
+The repo is private, so a **Kaggle dataset** is the cleanest route — no tokens, and the
+notebook finds it automatically under `/kaggle/input`.
 
-| Option | How | Notes |
+```bash
+# build the upload package (code only, ~500 KB)
+zip -qr dist/hrc-studio-stem-kaggle.zip . \
+    -x ".venv/*" ".git/*" "work/*" "models/*" "*/__pycache__/*" "*.pyc" "dist/*" "*.log"
+```
+
+Then in Kaggle: **Datasets → New Dataset →** drag `dist/hrc-studio-stem-kaggle.zip` in →
+*Create*. In your notebook: **Add Data → Your datasets →** pick it.
+
+| Flavour | Contents | Result |
 | --- | --- | --- |
-| **Dataset** (recommended) | Upload this repo as a Kaggle dataset, then *Add data* to the notebook. It mounts read-only at `/kaggle/input/<name>/` | Works with a private repo |
-| **Git clone** | `!git clone --depth 1 https://github.com/vollstek-ops/hrc-studio-stem.git /kaggle/working/repo` | Needs the repo public, or a `https://<token>@github.com/...` URL |
-| **Zip upload** | Upload the folder as a zip to `/kaggle/working`, then `!unzip -q repo.zip` | `/kaggle/working` is writable |
+| **Code only** (~0.5 MB) | repo, no `models/` | Internet must be **On**; weights download once (~610 MB) into `models/` |
+| **Self-contained** (~680 MB) | repo + `models/` | No network needed after install; the notebook copies the weights from the read-only `/kaggle/input` into `/kaggle/working/models` |
 
-The notebook's first cell handles all three and `cd`s into the repo for you.
+Either way the notebook's first cell:
+
+- finds the repo by looking for `stemkit/separator.py` under `/kaggle/input` or `/kaggle/working`
+- copies any bundled `model_bs_roformer*.ckpt` + `.yaml`/`.json` sidecars into the writable
+  working dir (Kaggle mounts datasets **read-only**, so the engine cannot use them in place)
+- points `STEM_MODEL_DIR` at whatever it found
+
+Prefer a clone? It works only with a token URL:
+`git clone https://<PAT>@github.com/vollstek-ops/hrc-studio-stem.git` — set that as `REPO_URL`
+in the notebook's first cell.
 
 ## 2 · Install (do not let pip swap your torch)
 
