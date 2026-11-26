@@ -644,6 +644,12 @@ class JobManager:
             proc.wait()
             self._sync_from_disk(job)
 
+            if job.cancel_requested and job.status not in TERMINAL:
+                # The worker was killed during the cancel grace period, so it
+                # never got to report the cancellation itself.
+                job.update(status=CANCELLED, stage="Cancelled", finished_at=time.time())
+                job.persist()
+
             if job.status in TERMINAL:
                 return
 
