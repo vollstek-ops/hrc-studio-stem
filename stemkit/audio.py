@@ -203,6 +203,66 @@ def subtype_of(path: str | Path) -> str:
         return handle.subtype or ""
 
 
+def mixdown(
+    sources: list[tuple[str | Path, float]],
+    out_path: str | Path,
+    *,
+    sample_rate: int = TARGET_SAMPLE_RATE,
+    channels: int = 2,
+    title: str = "",
+) -> Path:
+    """Sum stems with a per-stem linear gain into one 24-bit PCM WAV.
+
+    `amix` runs with `normalize=0`, so the bounce is a true summing bus: faders
+    at unity reproduce the original mix, exactly like a DAW bounce.
+    """
+    require_ffmpeg()
+    if not sources:
+        raise AudioError("There is nothing to mix down.")
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd: list[str] = [FFMPEG, "-hide_banner", "-nostdin", "-y", "-v", "error"]
+    for path, _gain in sources:
+        cmd += ["-i", str(path)]
+
+    chains: list[str] = []
+    for index, (_path, gain) in enumerate(sources):
+        gain = max(0.0, min(4.0, float(gain)))
+        if abs(gain - 1.0) < 1e-4:
+            chains.append(f"[{index}:a]anull[a{index}]")
+        else:
+            chains.append(f"[{index}:a]volume={gain:.4f}[a{index}]")
+
+    if len(sources) == 1:
+        graph = chains[0].replace("[a0]", "[mix]")
+    else:
+        joined = "".join(f"[a{index}]" for index in range(len(sources)))
+        chains.append(
+            f"{joined}amix=inputs={len(sources)}:duration=longest:normalize=0"
+            ":dropout_transition=0[mix]"
+        )
+        graph = ";".join(chains)
+
+    cmd += [
+        "-filter_complex", graph,
+        "-map", "[mix]",
+        "-c:a", "pcm_s24le",
+        "-ar", str(int(sample_rate)),
+        "-ac", str(int(channels)),
+    ]
+    if title:
+        cmd += ["-metadata", f"title={title}", "-metadata", "comment=HRC Studio Stem mixdown"]
+    cmd.append(str(out_path))
+
+    proc = _run(cmd, timeout=1800)
+    if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+        detail = (proc.stderr or proc.stdout or "ffmpeg error").strip()[:400]
+        raise AudioError(f"Mixdown failed: {detail}")
+    return out_path
+
+
 # --------------------------------------------------------------------------- #
 # Waveform peaks for the UI
 # --------------------------------------------------------------------------- #

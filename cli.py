@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""STEM command line — the same engine the web UI uses.
+"""HRC Studio Stem command line — the same engine the web UI uses.
 
     python cli.py song.mp3 --mode 2stem
     python cli.py album/*.flac --mode 6stem --out ./stems
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: no such file: {path}", file=sys.stderr)
         return 2
 
-    print(f"STEM {__version__} · mode={args.mode} · model={cfg['model']}")
+    print(f"HRC Studio Stem {__version__} · mode={args.mode} · model={cfg['model']}")
     print(f"output: {out_root}\n")
 
     manifests: list[dict] = []

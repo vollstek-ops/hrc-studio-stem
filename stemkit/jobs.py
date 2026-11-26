@@ -32,6 +32,32 @@ CANCELLED = "cancelled"
 
 TERMINAL = {DONE, ERROR, CANCELLED}
 
+# The fixed pipeline every separation walks through. The UI draws these as
+# steps with a live state, so the ids must stay stable.
+PIPELINE: list[tuple[str, str]] = [
+    ("decode", "Decoding to 24-bit"),
+    ("model", "Loading model"),
+    ("separate", "Separating stems"),
+    ("write", "Writing 24-bit WAVs"),
+    ("finalise", "Verifying & finalising"),
+]
+
+# `audio-separator` emits its own stage names through a log handler; map every
+# name we know onto one pipeline step.
+STAGE_STEPS = {
+    "Starting": "decode",
+    "Decoding to 24-bit": "decode",
+    "Loading model": "model",
+    "Downloading model": "model",
+    "Separating": "separate",
+    "Writing stems": "write",
+    "Finalising": "finalise",
+    "Complete": "finalise",
+    "Cancelling": "separate",
+}
+
+STEP_ORDER = {step_id: index for index, (step_id, _) in enumerate(PIPELINE)}
+
 
 def safe_filename(name: str) -> str:
     """Strip directories, control characters and anything shell-hostile."""
@@ -73,6 +99,10 @@ class Job:
         self.elapsed = 0.0
         self.stems: list[dict] = []
         self.cancel_requested = False
+        self.step = ""
+        self.step_started: dict[str, float] = {}
+        self.step_finished: dict[str, float] = {}
+        self._eta: float | None = None
         self._lock = threading.Lock()
 
     # -- paths ------------------------------------------------------------
@@ -89,10 +119,78 @@ class Job:
         with self._lock:
             for key, value in changes.items():
                 setattr(self, key, value)
-            if self.status in TERMINAL and self.finished_at is None:
-                self.finished_at = time.time()
+            if "stage" in changes:
+                self._enter_step(str(changes["stage"]))
+            if self.status in TERMINAL:
+                if self.finished_at is None:
+                    self.finished_at = time.time()
+                self._close_steps(self.finished_at)
 
-    def snapshot(self, base_url: str = "") -> dict:
+    # -- pipeline timing --------------------------------------------------
+    def _enter_step(self, stage: str) -> None:
+        step = STAGE_STEPS.get(stage)
+        if step is None or step == self.step:
+            return
+        now = time.time()
+        index = STEP_ORDER[step]
+        self._close_steps(now, before=index, fill_skipped=True)
+        self.step_started.setdefault(step, now)
+        self.step_finished.pop(step, None)
+        self.step = step
+
+    def _close_steps(self, when: float, before: int | None = None, *, fill_skipped: bool = False) -> None:
+        limit = len(PIPELINE) if before is None else before
+        for step_id, _ in PIPELINE[:limit]:
+            if step_id not in self.step_started:
+                # A step we never saw (e.g. a warm cached model) is not a lie:
+                # it took no meaningful time, so record it as instantaneous.
+                if not fill_skipped:
+                    continue
+                self.step_started[step_id] = when
+            if step_id not in self.step_finished:
+                self.step_finished[step_id] = when
+
+    def _step_payload(self) -> list[dict]:
+        payload = []
+        for step_id, label in PIPELINE:
+            started = self.step_started.get(step_id)
+            finished = self.step_finished.get(step_id)
+            if self.status == DONE:
+                started = started or self.started_at or self.created_at
+                finished = finished or self.finished_at or started
+                state = "done"
+            elif finished is not None:
+                state = "done"
+            elif started is not None:
+                state = "active"
+            else:
+                state = "pending"
+            payload.append(
+                {
+                    "id": step_id,
+                    "label": label,
+                    "state": state,
+                    "seconds": round(finished - started, 1) if started and finished else None,
+                }
+            )
+        return payload
+
+    def eta_seconds(self) -> float | None:
+        """Smoothed seconds remaining, or None while it cannot be estimated."""
+        if self.status != RUNNING or self.started_at is None or self.progress <= 0.02:
+            return None
+        elapsed = time.time() - self.started_at
+        if elapsed < 1.5 or self.progress >= 0.999:
+            return None
+        rate = self.progress / elapsed
+        if rate <= 1e-6:
+            return None
+        raw = max(0.0, (1.0 - self.progress) / rate)
+        # Blend, so one fast chunk never makes the estimate leap around.
+        self._eta = raw if self._eta is None else self._eta + (raw - self._eta) * 0.3
+        return round(max(0.0, self._eta), 1)
+
+    def snapshot(self, base_url: str = "", *, include_peaks: bool = True) -> dict:
         with self._lock:
             cfg = get_mode(self.mode)
             payload = {
@@ -109,10 +207,19 @@ class Job:
                 "message": self.message,
                 "error": self.error,
                 "duration": self.duration,
-                "elapsed": round(self.elapsed, 1),
+                # Live wall-clock while running, final duration once finished.
+                "elapsed": round(
+                    self.elapsed
+                    if self.finished_at
+                    else (time.time() - self.started_at if self.started_at else 0.0),
+                    1,
+                ),
                 "created_at": self.created_at,
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
+                "eta_seconds": self.eta_seconds(),
+                "pipeline": self._step_payload(),
+                "download_all_url": f"{base_url}/api/jobs/{self.id}/download-all",
                 "stems": [
                     {
                         "name": stem["name"],
@@ -124,7 +231,8 @@ class Job:
                         "channels": stem["channels"],
                         "bit_depth": stem["bit_depth"],
                         "subtype": stem.get("subtype", ""),
-                        "peaks": stem.get("peaks", []),
+                        # 480 floats per stem: skipped for list views.
+                        "peaks": stem.get("peaks", []) if include_peaks else [],
                         "stream_url": f"{base_url}/api/jobs/{self.id}/audio/{stem['slug']}",
                         "download_url": f"{base_url}/api/jobs/{self.id}/download/{stem['slug']}",
                     }
@@ -142,7 +250,7 @@ class Job:
                 {
                     key: value
                     for key, value in stem.items()
-                    if key in {"name", "slug", "filename", "bytes", "duration", "sample_rate", "channels", "bit_depth", "subtype", "path"}
+                    if key in {"name", "slug", "filename", "bytes", "duration", "sample_rate", "channels", "bit_depth", "subtype", "path", "peaks"}
                 }
                 for stem in self.stems
             ]
@@ -197,6 +305,17 @@ class JobManager:
                 job.started_at = data.get("started_at")
                 job.finished_at = data.get("finished_at")
                 job.stems = [stem for stem in data.get("stems", []) if (Path(stem.get("path", ""))).exists()]
+                # Reload the per-step timings so a reopened job still shows them.
+                for step in data.get("pipeline", []):
+                    step_id = step.get("id")
+                    if step_id not in STEP_ORDER:
+                        continue
+                    if step.get("state") == "done":
+                        job.step_started.setdefault(step_id, job.created_at)
+                        job.step_finished.setdefault(step_id, job.finished_at or job.created_at)
+                    elif step.get("state") == "active":
+                        job.step_started.setdefault(step_id, job.created_at)
+                        job.step = step_id
                 with self._lock:
                     self._jobs[job.id] = job
             except Exception:  # noqa: BLE001
@@ -379,4 +498,15 @@ class JobManager:
 
 manager = JobManager()
 
-__all__ = ["Job", "JobManager", "manager", "CANCELLED", "DONE", "ERROR", "QUEUED", "RUNNING", "TERMINAL"]
+__all__ = [
+    "Job",
+    "JobManager",
+    "manager",
+    "CANCELLED",
+    "DONE",
+    "ERROR",
+    "PIPELINE",
+    "QUEUED",
+    "RUNNING",
+    "TERMINAL",
+]

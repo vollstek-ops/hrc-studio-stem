@@ -1,4 +1,8 @@
-# STEM — studio-quality audio stem extractor
+# HRC Studio Stem
+
+**Studio-quality multi-track stem extraction and a practice studio, by [Vollstek](https://github.com/vollstek-ops).**
+
+Repo: <https://github.com/vollstek-ops/hrc-studio-stem>
 
 Split any track into **lossless 24-bit WAV** stems, locally, with a drag-and-drop web
 UI and a matching CLI. Built on [`audio-separator`](https://github.com/nomadkaraoke/python-audio-separator)
@@ -77,8 +81,27 @@ Open **<http://127.0.0.1:8000>**.
 
 1. Pick a mode (`2 Stem` or `6 Stem`).
 2. Drag a track onto the drop zone (or click to browse).
-3. Watch the stage-by-stage progress: *Decoding → Loading model → Separating → Writing stems*.
-4. Each stem gets an inline preview player with a clickable waveform and a **Download WAV** button.
+3. Watch the pipeline: *Decoding → Loading model → Separating → Writing → Finalising*, each
+   step with its own state and time, plus a live percentage and ETA.
+4. The stems open in a practice studio — a master transport over one shared timeline:
+
+| Control | What it does |
+| --- | --- |
+| Play / pause, stop | `Space` plays or pauses every stem from one clock, `Home` rewinds |
+| Speed `0.75× / 0.85× / 1.0×` | changes playback rate on all stems, pitch preserved |
+| Timeline | click or drag anywhere to seek every stem together |
+| `A–B loop` | set A and B at the playhead (`[`, `]`), toggle with `L`, `Esc` clears |
+| `M` / `S` + fader | mute, solo and level per stem, with a live meter on each lane |
+| `1`–`6` | solo that stem instantly (press again to clear) |
+| **Bounce mix** (`B`) | renders exactly what you hear — mute, solo and faders — to one 24-bit WAV |
+| **Download all (ZIP)** | one archive with every 24-bit WAV plus a `README.txt` manifest |
+
+The master lane and the stem lanes share the same grid, so a playhead, a loop boundary or
+a click means the same instant on every row.
+
+A bounce is a true summing bus (`amix` with `normalize=0`): with the faders at unity it
+reconstructs the original mix, one muted stem is `-∞`, and a fader at 50 % is exactly
+`-6.0 dB`. Bounces live in `work/<job>/bounces/` and the newest six are kept.
 
 Finished results are addressable: `http://127.0.0.1:8000/?job=<job id>` reopens that
 session's stems (the URL updates itself after every run), so a reload never loses your work.
@@ -142,7 +165,7 @@ audio-separator "My Song.wav" --model_filename htdemucs_6s.yaml \
 ## 5 · Why the output is really 24-bit
 
 `audio-separator` chooses the WAV subtype of its output from the **input file's** subtype
-(`PCM_16` in → 16-bit stems out). STEM therefore decodes every upload to
+(`PCM_16` in → 16-bit stems out). HRC Studio Stem therefore decodes every upload to
 `pcm_s24le` at 44.1 kHz first, hands that to the model, then re-checks each written stem
 with `soundfile` and re-writes it as `PCM_24` if anything else slipped through.
 
@@ -165,12 +188,23 @@ want it — see `normalization_threshold` in `stemkit/separator.py`).
 | `DELETE` | `/api/jobs/{id}` | drop the job and its audio |
 | `GET` | `/api/jobs/{id}/audio/{slug}` | WAV stream with HTTP range support |
 | `GET` | `/api/jobs/{id}/download/{slug}` | `Content-Disposition: attachment` |
+| `GET` | `/api/jobs/{id}/download-all` | ZIP of every 24-bit WAV stem + `README.txt` manifest (cached per job) |
+| `POST` | `/api/jobs/{id}/mixdown` | body `{"stems":[{"slug","gain"}],"name"}` → 24-bit WAV bounce |
+| `GET` | `/api/jobs/{id}/mixdown/{file}` | stream or (`?download=1`) download a bounce |
 
 ```bash
 curl -F "file=@track.mp3" -F "mode=2stem" http://127.0.0.1:8000/api/jobs
 curl http://127.0.0.1:8000/api/jobs/<id>
 curl -OJ http://127.0.0.1:8000/api/jobs/<id>/download/vocals
+curl -OJ http://127.0.0.1:8000/api/jobs/<id>/download-all
+curl -X POST http://127.0.0.1:8000/api/jobs/<id>/mixdown \
+     -H 'Content-Type: application/json' \
+     -d '{"stems":[{"slug":"vocals","gain":1},{"slug":"instrumental","gain":0}],"name":"vocals only"}'
 ```
+
+Every job snapshot also carries `pipeline` (the five stages with `state` and
+seconds spent) and `eta_seconds`, which is what the progress panel and the studio
+are built from.
 
 ---
 
@@ -198,7 +232,7 @@ stem/
 ├── requirements.txt
 ├── templates/index.html    single-page UI
 ├── static/app.css          studio dark theme
-├── static/app.js           drag-drop, polling, waveform canvas, players
+├── static/app.js           drag-drop, polling, pipeline, WebAudio studio mixer
 ├── static/favicon.svg
 ├── stemkit/
 │   ├── config.py           modes → model mapping, paths, limits
