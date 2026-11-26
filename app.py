@@ -37,6 +37,7 @@ from stemkit.config import (
     public_qualities,
 )
 from stemkit.jobs import DONE, manager, safe_filename, sanitize_stem_filename
+from stemkit.maintenance import clear_caches
 from stemkit.separator import device_report, drop_cache
 from stemkit.youtube import available as youtube_available, validate_url as validate_youtube_url
 
@@ -139,6 +140,12 @@ async def modes() -> dict:
         "quality_default": DEFAULT_QUALITY,
         "qualities": public_qualities(),
     }
+
+
+@app.post("/api/cache/clear")
+async def clear_cache() -> dict:
+    """Free RAM (warm models), delete rebuildable files, prune expired jobs."""
+    return await run_in_threadpool(clear_caches, manager.protected_dirs())
 
 
 @app.get("/api/qualities")

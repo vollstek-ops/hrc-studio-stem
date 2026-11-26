@@ -30,6 +30,23 @@ Split any track into **lossless 24-bit WAV** stems, locally, with a desktop-styl
 UI and a matching CLI. Built on [`audio-separator`](https://github.com/nomadkaraoke/python-audio-separator)
 (BS-RoFormer + HTDemucs) and FastAPI.
 
+---
+
+## Who it's for
+
+| End user | What they do with it |
+| --- | --- |
+| **Guitarists, bassists, drummers, pianists** | mute their own instrument and play along with the rest of the band, or solo a part to learn it note-for-note |
+| **Vocalists & singing students** | sing over the instrumental, or isolate a vocal line to study phrasing and harmony |
+| **Music teachers & students** | slow a passage to 0.75×/0.85×, loop the tricky eight bars with A–B loop, and bounce the exercise |
+| **Producers, remixers & DJs** | pull clean 24-bit stems for sampling, mashups and sets — acapellas, drum buses, bass lines |
+| **Karaoke & cover creators** | turn any track into a backing track in one click, straight from a YouTube link |
+| **Audio engineers** | verify a separation against the original (stems sum back to the mix), then export per-stem WAVs or a custom bounce |
+
+**The core use case:** drop a song (or paste a link), get lossless stems in seconds, then
+rehearse against them in a studio where every lane can be muted, soloed, slowed and
+looped — all local, nothing leaves the machine.
+
 | Mode | Model | Stems |
 | --- | --- | --- |
 | `2stem` | `model_bs_roformer_ep_317_sdr_12.9755.ckpt` (BS-RoFormer, SDR 12.98) | Vocals, Instrumental |
@@ -138,6 +155,10 @@ chunking knobs of the architecture a mode actually uses (`mdx_params` / `vr_para
 passed through for the MDX and VR families). Inference runs on **Apple Silicon MPS** when
 `torch.backends.mps.is_available()` — the app verifies the device with a real tensor op at
 startup and shows it in the header.
+
+The **Clear caches** button in the header (broom icon) frees model memory, deletes
+rebuildable ZIP archives and temp files, and prunes sessions past their TTL — stems,
+bounces and running jobs are never touched.
 
 Finished results are addressable: `http://127.0.0.1:8000/?job=<job id>` reopens that
 session's stems (the URL updates itself after every run), so a reload never loses your work.

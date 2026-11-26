@@ -18,6 +18,10 @@
     quality: $("#quality"),
     devicePill: $("#device-pill"),
     engineDot: $("#engine-dot"),
+    cacheBtn: $("#cache-btn"),
+    toast: $("#toast"),
+    splash: $("#splash"),
+    splashNote: $("#splash-note"),
     recentBtn: $("#recent-btn"),
     recentMenu: $("#recent-menu"),
     recentCount: $("#recent-count"),
@@ -254,6 +258,56 @@
     if (!inside) closePopovers();
   });
 
+  /* ---------------------------------------------------------- splash/toast */
+
+  let toastTimer = 0;
+  function toast(message, kind = "ok") {
+    els.toast.textContent = message;
+    els.toast.dataset.kind = kind;
+    els.toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      els.toast.hidden = true;
+    }, 4200);
+  }
+
+  const splashShownAt = Date.now();
+  function hideSplash() {
+    if (!els.splash || els.splash.classList.contains("is-done")) return;
+    // keep the splash up long enough to be seen, then fade it out
+    const elapsed = Date.now() - splashShownAt;
+    const wait = Math.max(0, 450 - elapsed);
+    setTimeout(() => {
+      els.splash.classList.add("is-done");
+      setTimeout(() => {
+        els.splash.hidden = true;
+      }, 500);
+    }, wait);
+  }
+
+  async function clearCaches() {
+    if (els.cacheBtn.disabled) return;
+    els.cacheBtn.disabled = true;
+    els.cacheBtn.classList.add("is-busy");
+    try {
+      const report = await api("/api/cache/clear", { method: "POST" });
+      const bits = [`freed ${fmtBytes(report.freed_bytes)}`];
+      if (report.models_unloaded) bits.push(`${report.models_unloaded} model${report.models_unloaded === 1 ? "" : "s"} unloaded`);
+      if (report.expired_jobs.length) bits.push(`${report.expired_jobs.length} old session${report.expired_jobs.length === 1 ? "" : "s"} removed`);
+      if (!report.removed_files && !report.models_unloaded && !report.expired_jobs.length) {
+        toast("Nothing to clear — caches are already clean.");
+      } else {
+        toast(`${bits.join(" · ")}.`);
+        loadHistory();
+      }
+    } catch (err) {
+      toast(`Could not clear caches: ${err.message}`, "warn");
+    } finally {
+      els.cacheBtn.disabled = false;
+      els.cacheBtn.classList.remove("is-busy");
+    }
+  }
+
   /* ----------------------------------------------------------------- boot */
 
   async function boot() {
@@ -296,6 +350,7 @@
 
     loadHistory();
     await restoreFromUrl();
+    hideSplash();
   }
 
   /* A job id in the URL (?job=<id>) reopens those results directly. */
@@ -312,17 +367,24 @@
         syncQuality();
         finishSuccess(job);
       } else if (job.status === "running" || job.status === "queued") {
-        state.busy = true;
-        els.dropzone.classList.add("busy");
-        showPane("source");
-        showLoader(true);
-        setText(els.progressTitle, job.source_kind === "url" ? "Fetching & separating…" : "Separating…");
-        startElapsedTimer(job.elapsed || 0);
-        poll();
+        followRunningJob(job);
       }
     } catch {
       // Stale or expired link: fall back to the empty state silently.
     }
+  }
+
+  /* Re-attach the loader to a job that is already running on the server —
+     after a reload, or from the Recent menu. */
+  function followRunningJob(job) {
+    state.job = job;
+    state.busy = true;
+    els.dropzone.classList.add("busy");
+    showPane("source");
+    showLoader(true);
+    setText(els.progressTitle, job.source_kind === "url" ? "Fetching & separating…" : "Separating…");
+    startElapsedTimer(job.elapsed || 0);
+    poll();
   }
 
   /* ------------------------------------------------------------ mode tabs */
@@ -1707,6 +1769,22 @@
           <span class="h-name" title="${esc(job.filename)}">${esc(job.filename)}</span>
           <span class="h-tag">${stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
         `;
+        if (job.status === "running" || job.status === "queued") {
+          const resume = document.createElement("button");
+          resume.type = "button";
+          resume.className = "btn ghost small";
+          resume.textContent = "Resume";
+          resume.addEventListener("click", async () => {
+            closePopovers();
+            try {
+              const full = await api(`/api/jobs/${job.id}`);
+              followRunningJob(full);
+            } catch (err) {
+              showError(err.message);
+            }
+          });
+          item.appendChild(resume);
+        }
         if (job.status === "done" && job.stems.length) {
           const zip = document.createElement("a");
           zip.className = "menu-dl";
@@ -1808,6 +1886,7 @@
     }
   });
   els.recentRefresh.addEventListener("click", loadHistory);
+  els.cacheBtn.addEventListener("click", clearCaches);
   els.cancelBtn.addEventListener("click", cancel);
   els.newTrack.addEventListener("click", resetForNewTrack);
   els.bounceBtn.addEventListener("click", bounceMix);
@@ -1827,5 +1906,8 @@
     if (mixer.tracks.length) paintFrame(currentTime(), true);
   });
 
+  // The splash must never trap the user: hide it no matter what happens below.
+  setTimeout(hideSplash, 6000);
+  window.addEventListener("error", hideSplash);
   boot();
 })();
