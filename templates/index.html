@@ -3,111 +3,149 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>HRC Studio Stem — Multi-track Stem Practice Studio</title>
-<meta name="description" content="HRC Studio Stem — split any track into lossless 24-bit WAV stems and practise along in a multi-track studio: vocals, instrumental, drums, bass, guitar, piano." />
+<title>HRC Studio Stem</title>
+<meta name="description" content="HRC Studio Stem — split any track into lossless 24-bit WAV stems and practise in a multi-track studio." />
 <meta name="application-name" content="HRC Studio Stem" />
 <meta name="apple-mobile-web-app-title" content="HRC Studio Stem" />
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="/static/app.css" />
 </head>
-<body>
+<body class="app">
 <div class="grain" aria-hidden="true"></div>
 
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-mark" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <path d="M4 14v-4M8 18V6M12 16V8M16 19V5M20 13v-2" />
+<!-- ============================================================ app bar -->
+<header class="appbar">
+  <div class="appbar-left">
+    <span class="app-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 2.6c3.9 0 8 2.2 8 6.7 0 4.6-5.1 10.4-8 12.4-2.9-2-8-7.8-8-12.4 0-4.5 4.1-6.7 8-6.7z"
+              fill="url(#pickGrad)" stroke="rgba(110,231,255,.6)" stroke-width="1.1"/>
+        <g fill="#08121b" fill-opacity="0.85">
+          <rect x="7.4" y="10.4" width="1.5" height="3.6" rx="0.75"/>
+          <rect x="10.1" y="7.6" width="1.5" height="9.2" rx="0.75"/>
+          <rect x="12.8" y="9" width="1.5" height="6.4" rx="0.75"/>
+          <rect x="15.5" y="8.2" width="1.5" height="8" rx="0.75"/>
+        </g>
+        <defs>
+          <linearGradient id="pickGrad" x1="4" y1="3" x2="20" y2="22">
+            <stop offset="0" stop-color="#6ee7ff"/><stop offset="1" stop-color="#a78bfa"/>
+          </linearGradient>
+        </defs>
       </svg>
     </span>
-    <span class="brand-text">
-      <strong>HRC</strong>
-      <em>studio stem</em>
-    </span>
+    <span class="app-name">HRC <em>Studio Stem</em></span>
   </div>
-  <div class="topbar-meta">
-    <span class="pill" id="engine-pill">BS-RoFormer · 24-bit</span>
-    <span class="pill ghost" id="ffmpeg-pill">checking ffmpeg…</span>
+
+  <div class="appbar-center">
+    <div class="tabs" id="mode-tabs" role="tablist" aria-label="Separation mode"></div>
+    <button class="ghost-icon" id="mode-expand" type="button" aria-expanded="false"
+            aria-controls="mode-details" title="What is in this mode?">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="popover mode-details" id="mode-details" hidden></div>
+
+    <div class="seg" id="quality" role="radiogroup" aria-label="Separation quality"></div>
+
+    <span class="pill ghost" id="device-pill" title="Inference accelerator">…</span>
+  </div>
+
+  <div class="appbar-right">
+    <span class="status-dot" id="engine-dot" role="img" aria-label="engine status"></span>
+    <button class="btn ghost small" id="recent-btn" type="button" aria-expanded="false" aria-controls="recent-menu">
+      Recent
+      <span class="count" id="recent-count">0</span>
+    </button>
+    <div class="popover recent-menu" id="recent-menu" hidden>
+      <div class="menu-head">
+        <span>Sessions</span>
+        <button class="ghost-icon" id="recent-refresh" type="button" title="Refresh list">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8m0-4v4h-4M20 12a8 8 0 0 1-13.7 5.7L4 16m0 4v-4h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <ul class="history" id="history"></ul>
+      <p class="menu-empty" id="recent-empty" hidden>Nothing separated yet.</p>
+    </div>
   </div>
 </header>
 
-<main>
-  <section class="hero">
-    <h1>Split a track into <span class="grad">studio stems</span></h1>
-    <p class="lede">
-      Drop an audio file and get lossless 24-bit WAV. Then rehearse in the practice
-      studio: solo any part, slow it down, and loop the hard eight bars.
-    </p>
-  </section>
+<!-- ========================================================== workspace -->
+<main class="workspace">
 
-  <!-- ---------------------------------------------------------------- mode -->
-  <section class="panel" aria-labelledby="mode-heading">
-    <h2 id="mode-heading" class="panel-title">1 · Choose a mode</h2>
-    <div class="modes" id="modes" role="radiogroup" aria-label="Separation mode">
-      <p class="muted">Loading modes…</p>
+  <!-- ------------------------------------------------------- source pane -->
+  <section class="pane pane-source" id="source-pane" aria-label="Add audio">
+    <div class="source-card" id="source-card">
+      <div class="source-tabs" role="tablist" aria-label="Audio source">
+        <button class="src-tab is-on" id="tab-upload" data-src="upload" role="tab" aria-selected="true">Upload file</button>
+        <button class="src-tab" id="tab-youtube" data-src="youtube" role="tab" aria-selected="false">YouTube link</button>
+      </div>
+
+      <div class="source-body">
+        <div class="src-panel" id="src-upload">
+          <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Drop an audio file or click to browse">
+            <input type="file" id="file-input" accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg,.opus,.aiff,.wma,.mp4,.webm" hidden />
+            <div class="dropzone-inner">
+              <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" />
+                <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+              </svg>
+              <p class="drop-title">Drop a track here</p>
+              <p class="drop-hint">or click to browse</p>
+            </div>
+            <div class="drop-flash" aria-hidden="true"></div>
+          </div>
+        </div>
+
+        <form class="src-panel src-youtube" id="src-youtube" novalidate hidden>
+          <label class="field-label" for="url-input">Paste a link</label>
+          <div class="field-row">
+            <input class="text-input" id="url-input" type="url" inputmode="url" autocomplete="off"
+                   placeholder="https://www.youtube.com/watch?v=…" spellcheck="false" />
+            <button class="btn" id="url-submit" type="submit">Fetch &amp; separate</button>
+          </div>
+          <p class="field-hint" id="url-hint">Any public video or audio link, up to 20 minutes.</p>
+        </form>
+      </div>
     </div>
-  </section>
 
-  <!-- ---------------------------------------------------------------- drop -->
-  <section class="panel" aria-labelledby="drop-heading">
-    <h2 id="drop-heading" class="panel-title">2 · Add audio</h2>
-    <div class="dropzone" id="dropzone" tabindex="0" role="button"
-         aria-describedby="drop-hint">
-      <input type="file" id="file-input" accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg,.opus,.aiff,.wma,.mp4,.webm" hidden />
-      <div class="dropzone-inner">
-        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" />
-          <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+    <!-- loader -->
+    <div class="loader-card" id="progress-panel" hidden role="status" aria-live="polite">
+      <div class="ring" id="ring" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="ring-track" cx="60" cy="60" r="52" />
+          <circle class="ring-fill" id="ring-fill" cx="60" cy="60" r="52" />
+          <circle class="ring-spin" cx="60" cy="60" r="52" />
         </svg>
-        <p class="drop-title">Drop your track here</p>
-        <p class="drop-hint" id="drop-hint">or click to browse — WAV, FLAC, MP3, M4A, OGG, AIFF up to 500 MB</p>
+        <span class="ring-pct" id="progress-pct">0%</span>
       </div>
-      <div class="drop-flash" aria-hidden="true"></div>
-    </div>
-    <p class="muted small" id="upload-note"></p>
-  </section>
-
-  <!-- ------------------------------------------------------------- progress -->
-  <section class="panel" id="progress-panel" hidden aria-live="polite">
-    <div class="progress-head">
-      <div>
-        <h2 class="panel-title" id="progress-title">Separating…</h2>
-        <p class="muted small" id="progress-file"></p>
-      </div>
-      <span class="stage-badge" id="stage-badge">Starting</span>
-    </div>
-    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar">
-      <div class="bar-fill" id="bar-fill"></div>
-      <div class="bar-shimmer" aria-hidden="true"></div>
-    </div>
-    <div class="progress-foot">
-      <span id="progress-pct">0%</span>
-      <span class="eta" id="progress-eta">estimating…</span>
-      <span id="progress-elapsed">0:00 elapsed</span>
+      <p class="loader-title" id="progress-title">Separating…</p>
+      <p class="loader-file" id="progress-file"></p>
+      <p class="loader-meta">
+        <span class="stage-badge" id="stage-badge">Starting</span>
+        <span class="eta" id="progress-eta"></span>
+        <span id="progress-elapsed"></span>
+      </p>
+      <ol class="stepper" id="pipeline" aria-label="Pipeline"></ol>
       <button class="btn ghost small" id="cancel-btn" type="button">Cancel</button>
+      <p class="error" id="error-box" hidden></p>
     </div>
-    <ol class="pipeline" id="pipeline" aria-label="Separation pipeline"></ol>
-    <p class="error" id="error-box" hidden></p>
   </section>
 
-  <!-- -------------------------------------------------------------- studio -->
-  <section class="panel studio" id="studio" hidden aria-label="Practice studio">
-    <div class="studio-head">
-      <div>
-        <h2 class="panel-title">3 · Practice studio</h2>
-        <p class="muted small" id="results-meta"></p>
+  <!-- ------------------------------------------------------- studio pane -->
+  <section class="pane pane-studio" id="studio" hidden aria-label="Practice studio">
+    <div class="studio-bar">
+      <div class="studio-meta">
+        <span class="studio-file" id="results-meta"></span>
       </div>
       <div class="results-actions">
         <button class="btn" id="bounce-btn" type="button" title="Render the current mute/solo/fader mix to a 24-bit WAV (B)">
           <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10m0 0l4-4m-4 4l-4-4M5 18h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
           <span id="bounce-label">Bounce mix</span>
         </button>
-        <a class="btn ghost" id="download-all" href="#" download>Download all (ZIP)</a>
+        <a class="btn ghost" id="download-all" href="#" download>Download ZIP</a>
         <button class="btn ghost" id="new-track" type="button">New track</button>
       </div>
     </div>
 
-    <!-- master transport -->
     <div class="transport" role="group" aria-label="Master transport">
       <button class="play-btn" id="play-btn" type="button" aria-label="Play (Space)" aria-pressed="false">
         <svg class="ico ico-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5l11 6.5-11 6.5z" fill="currentColor"/></svg>
@@ -131,10 +169,10 @@
 
       <div class="loopbox">
         <button class="btn ghost small loop-toggle" id="loop-toggle" type="button" aria-pressed="false" title="Toggle A–B loop (L)">
-          <span class="loop-dot" aria-hidden="true"></span>A–B loop
+          <span class="loop-dot" aria-hidden="true"></span>A–B
         </button>
-        <button class="btn ghost small" id="set-a" type="button" title="Set loop start at the playhead ( [ )">Set A</button>
-        <button class="btn ghost small" id="set-b" type="button" title="Set loop end at the playhead ( ] )">Set B</button>
+        <button class="btn ghost small" id="set-a" type="button" title="Set loop start ( [ )">A</button>
+        <button class="btn ghost small" id="set-b" type="button" title="Set loop end ( ] )">B</button>
         <button class="btn ghost small" id="clear-loop" type="button" title="Clear loop points (Esc)">Clear</button>
         <span class="loop-readout" id="loop-readout">A — · B —</span>
       </div>
@@ -150,7 +188,6 @@
       </div>
     </div>
 
-    <!-- master timeline: shares the track lane grid so every playhead lines up -->
     <div class="timeline">
       <div class="timeline-grid">
         <div class="timeline-tag">
@@ -169,42 +206,19 @@
       </div>
     </div>
 
-    <!-- tracks -->
     <div class="tracklist" id="stems" role="list" aria-label="Stem tracks"></div>
 
     <p class="bounce-note" id="bounce-note" hidden></p>
 
     <div class="shortcut-strip" aria-label="Keyboard shortcuts">
-      <span><kbd>Space</kbd> play / pause</span>
-      <span><kbd>1</kbd>–<kbd>6</kbd> solo stem</span>
-      <span><kbd>M</kbd> mute focused</span>
-      <span><kbd>S</kbd> solo focused</span>
-      <span><kbd>[</kbd> set A</span>
-      <span><kbd>]</kbd> set B</span>
-      <span><kbd>L</kbd> loop</span>
-      <span><kbd>←</kbd><kbd>→</kbd> seek 2 s</span>
-      <span><kbd>B</kbd> bounce mix</span>
-      <span><kbd>Esc</kbd> clear loop</span>
+      <span><kbd>Space</kbd> play</span>
+      <span><kbd>1</kbd>–<kbd>6</kbd> solo</span>
+      <span><kbd>M</kbd>/<kbd>S</kbd> mute/solo</span>
+      <span><kbd>[</kbd><kbd>]</kbd> loop</span>
+      <span><kbd>B</kbd> bounce</span>
+      <span><kbd>Esc</kbd> clear</span>
     </div>
   </section>
-
-  <!-- -------------------------------------------------------------- history -->
-  <section class="panel" id="history-panel" hidden>
-    <h2 class="panel-title">Recent sessions</h2>
-    <ul class="history" id="history"></ul>
-  </section>
-
-  <footer class="foot">
-    <span>Local-first: audio never leaves this machine.</span>
-    <span class="dot">·</span>
-    <span id="foot-engine">audio-separator</span>
-    <span class="dot">·</span>
-    <span>24-bit PCM WAV output</span>
-    <span class="dot">·</span>
-    <a class="foot-link" href="https://github.com/vollstek-ops/hrc-studio-stem" target="_blank" rel="noreferrer noopener">HRC Studio Stem</a>
-    <span class="dot">·</span>
-    <span>Vollstek</span>
-  </footer>
 </main>
 
 <script src="/static/app.js" defer></script>

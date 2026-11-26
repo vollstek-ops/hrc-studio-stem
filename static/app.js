@@ -1,10 +1,9 @@
 /* ==========================================================================
    HRC Studio Stem — front-end controller (vanilla JS, no build step)
 
-   Two halves:
-     1. upload + pipeline progress (polling /api/jobs)
-     2. the practice studio: one shared clock driving every stem through a
-        WebAudio graph (gain per track, analyser per track, master bus)
+   Layout: a fixed desktop-app shell (header + workspace panes).
+   Half 1 = shell: source picker, link fetching, loader, recent menu.
+   Half 2 = the studio: one shared clock driving every stem through WebAudio.
    ========================================================================== */
 (() => {
   "use strict";
@@ -12,24 +11,48 @@
   const $ = (sel, root = document) => root.querySelector(sel);
 
   const els = {
-    modes: $("#modes"),
+    // header
+    modeTabs: $("#mode-tabs"),
+    modeExpand: $("#mode-expand"),
+    modeDetails: $("#mode-details"),
+    quality: $("#quality"),
+    devicePill: $("#device-pill"),
+    engineDot: $("#engine-dot"),
+    recentBtn: $("#recent-btn"),
+    recentMenu: $("#recent-menu"),
+    recentCount: $("#recent-count"),
+    recentRefresh: $("#recent-refresh"),
+    recentEmpty: $("#recent-empty"),
+    history: $("#history"),
+
+    // source pane
+    sourcePane: $("#source-pane"),
+    sourceCard: $("#source-card"),
+    tabUpload: $("#tab-upload"),
+    tabYoutube: $("#tab-youtube"),
+    srcUpload: $("#src-upload"),
+    srcYoutube: $("#src-youtube"),
+    urlInput: $("#url-input"),
+    urlSubmit: $("#url-submit"),
+    urlHint: $("#url-hint"),
     dropzone: $("#dropzone"),
     fileInput: $("#file-input"),
-    uploadNote: $("#upload-note"),
-    enginePill: $("#engine-pill"),
-    ffmpegPill: $("#ffmpeg-pill"),
+
+    // loader
     progressPanel: $("#progress-panel"),
+    ring: $("#ring"),
+    ringFill: $("#ring-fill"),
     progressTitle: $("#progress-title"),
     progressFile: $("#progress-file"),
     stageBadge: $("#stage-badge"),
-    bar: $("#bar"),
-    barFill: $("#bar-fill"),
     pct: $("#progress-pct"),
     eta: $("#progress-eta"),
     elapsed: $("#progress-elapsed"),
     pipeline: $("#pipeline"),
     cancelBtn: $("#cancel-btn"),
     errorBox: $("#error-box"),
+
+    // studio
     studio: $("#studio"),
     resultsMeta: $("#results-meta"),
     stems: $("#stems"),
@@ -42,7 +65,7 @@
     stopBtn: $("#stop-btn"),
     timeCur: $("#time-cur"),
     timeDur: $("#time-dur"),
-    speedButtons: Array.from(document.querySelectorAll(".seg-btn")),
+    speedButtons: Array.from(document.querySelectorAll(".seg-btn[data-rate]")),
     loopToggle: $("#loop-toggle"),
     setA: $("#set-a"),
     setB: $("#set-b"),
@@ -56,9 +79,6 @@
     timelineRate: $("#timeline-rate"),
     timelineTotal: $("#timeline-total"),
     timelineLoopTag: $("#timeline-loop-tag"),
-    historyPanel: $("#history-panel"),
-    history: $("#history"),
-    footEngine: $("#foot-engine"),
   };
 
   const STEM_COLORS = {
@@ -72,10 +92,16 @@
   };
   const FALLBACK_COLORS = ["#6ee7ff", "#a78bfa", "#f472b6", "#fbbf24", "#34d399", "#f87171"];
 
+  const RING_LENGTH = 2 * Math.PI * 52; // circumference of the loader ring
+
   const state = {
     modes: [],
     defaultMode: "2stem",
     mode: "2stem",
+    qualities: [],
+    quality: "studio",
+    device: "cpu",
+    source: "upload",
     job: null,
     pollTimer: null,
     startedAt: 0,
@@ -84,6 +110,7 @@
     elapsedTimer: null,
     uploadAbort: null,
     busy: false,
+    linksEnabled: false,
   };
 
   /* The mixer owns every audio node. One clock (mixer.leader) is the truth for
@@ -118,6 +145,10 @@
     }[ch]));
 
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+  const setText = (el, value) => {
+    if (el && el.textContent !== value) el.textContent = value;
+  };
 
   const fmtTime = (seconds) => {
     const total = Math.max(0, Math.round(seconds || 0));
@@ -177,19 +208,76 @@
     return body;
   }
 
+  /* ---------------------------------------------------------------- panes */
+
+  function showPane(name) {
+    const studio = name === "studio";
+    els.studio.hidden = !studio;
+    els.sourcePane.hidden = studio;
+    if (studio) showLoader(false);
+  }
+
+  function showLoader(active) {
+    els.progressPanel.hidden = !active;
+    els.sourceCard.hidden = active;
+    els.progressPanel.classList.toggle("is-running", active);
+  }
+
+  function setProgress(fraction) {
+    const value = clamp(fraction || 0, 0, 1);
+    els.pct.textContent = `${Math.round(value * 100)}%`;
+    els.ringFill.style.strokeDashoffset = String(RING_LENGTH * (1 - value));
+    els.ring.setAttribute("aria-valuenow", String(Math.round(value * 100)));
+  }
+
+  /* -------------------------------------------------------------- popovers */
+
+  function togglePopover(panel, button, open) {
+    const next = open == null ? panel.hidden : open;
+    panel.hidden = !next;
+    button.setAttribute("aria-expanded", String(next));
+    return next;
+  }
+
+  function closePopovers() {
+    togglePopover(els.modeDetails, els.modeExpand, false);
+    togglePopover(els.recentMenu, els.recentBtn, false);
+  }
+
+  document.addEventListener("pointerdown", (event) => {
+    if (els.modeDetails.hidden && els.recentMenu.hidden) return;
+    const inside =
+      els.modeDetails.contains(event.target) ||
+      els.recentMenu.contains(event.target) ||
+      els.modeExpand.contains(event.target) ||
+      els.recentBtn.contains(event.target);
+    if (!inside) closePopovers();
+  });
+
   /* ----------------------------------------------------------------- boot */
 
   async function boot() {
     try {
       const health = await api("/api/health");
-      els.ffmpegPill.textContent = health.ffmpeg ? "ffmpeg ready" : "ffmpeg missing";
-      els.ffmpegPill.className = `pill ${health.ffmpeg ? "ok" : "bad"}`;
-      els.uploadNote.textContent =
-        `Lossless 24-bit PCM WAV · ${health.max_upload_mb} MB per file · ` +
-        `accepted: ${health.accepted_extensions.join(" ")}`;
+      state.linksEnabled = Boolean(health.youtube);
+      state.device = health.device || "cpu";
+      els.engineDot.className = `status-dot ${health.ffmpeg ? "ok" : "bad"}`;
+      els.engineDot.title = health.ffmpeg
+        ? `ffmpeg ready · ${health.device_label || "CPU"}`
+        : "ffmpeg is missing — only WAV input will work";
+      els.devicePill.textContent = health.device_label || "CPU";
+      els.devicePill.className = `pill ${state.device === "cpu" ? "ghost" : "ok"}`;
+      els.devicePill.title = health.autocast
+        ? `${health.device_label} with autocast`
+        : `${health.device_label} inference`;
+
+      els.tabYoutube.disabled = !state.linksEnabled;
+      if (!state.linksEnabled) {
+        els.tabYoutube.title = "Install yt-dlp to fetch audio from links";
+      }
     } catch {
-      els.ffmpegPill.textContent = "offline";
-      els.ffmpegPill.className = "pill bad";
+      els.engineDot.className = "status-dot bad";
+      els.engineDot.title = "server offline";
     }
 
     try {
@@ -197,10 +285,13 @@
       state.modes = payload.modes;
       state.defaultMode = payload.default;
       state.mode = payload.default;
-      renderModes();
-      updateEnginePill();
+      state.qualities = payload.qualities || [];
+      state.quality = savedQuality() || payload.quality_default || "studio";
+      renderModeTabs();
+      renderModeDetails();
+      renderQuality();
     } catch (err) {
-      els.modes.innerHTML = `<p class="muted">Could not load modes: ${esc(err.message)}</p>`;
+      els.modeTabs.innerHTML = `<span class="muted small">Could not load modes: ${esc(err.message)}</span>`;
     }
 
     loadHistory();
@@ -216,15 +307,17 @@
       state.job = job;
       if (job.status === "done") {
         state.mode = job.mode;
-        syncModeSelection();
-        updateEnginePill();
+        if (job.quality) state.quality = job.quality;
+        syncModeTabs();
+        syncQuality();
         finishSuccess(job);
       } else if (job.status === "running" || job.status === "queued") {
         state.busy = true;
         els.dropzone.classList.add("busy");
-        els.progressPanel.hidden = false;
-        els.progressTitle.textContent = "Separating…";
-        startElapsedTimer();
+        showPane("source");
+        showLoader(true);
+        setText(els.progressTitle, job.source_kind === "url" ? "Fetching & separating…" : "Separating…");
+        startElapsedTimer(job.elapsed || 0);
         poll();
       }
     } catch {
@@ -232,57 +325,125 @@
     }
   }
 
-  function updateEnginePill() {
-    const mode = state.modes.find((m) => m.id === state.mode);
-    if (mode) {
-      els.enginePill.textContent = `${mode.model_label} · 24-bit`;
-      els.footEngine.textContent = `${mode.model}`;
-    }
+  /* ------------------------------------------------------------ mode tabs */
+
+  function renderModeTabs() {
+    els.modeTabs.innerHTML = "";
+    state.modes.forEach((mode) => {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "tab";
+      tab.dataset.mode = mode.id;
+      tab.setAttribute("role", "tab");
+      tab.innerHTML =
+        `<span class="tab-name">${esc(mode.name)}</span>` +
+        `<span class="tab-sub">${mode.stems.length} stems</span>`;
+      tab.addEventListener("click", () => selectMode(mode.id));
+      els.modeTabs.appendChild(tab);
+    });
+    syncModeTabs();
   }
 
-  /* ---------------------------------------------------------------- modes */
-
-  function renderModes() {
-    els.modes.innerHTML = "";
-    state.modes.forEach((mode) => {
-      const card = document.createElement("button");
-      card.type = "button";
-      card.className = "mode-card";
-      card.setAttribute("role", "radio");
-      card.dataset.mode = mode.id;
-      card.innerHTML = `
-        <div class="mode-top">
-          <span class="mode-name">${esc(mode.name)}</span>
-          <span class="mode-check" aria-hidden="true"></span>
-        </div>
-        <span class="mode-tagline">${esc(mode.tagline)}</span>
-        <p class="mode-desc">${esc(mode.description)}</p>
-        <div class="mode-chips">${mode.stems.map((s) => `<span class="chip">${esc(s)}</span>`).join("")}</div>
-        <span class="mode-model">${esc(mode.model)}</span>
-      `;
-      card.addEventListener("click", () => selectMode(mode.id));
-      card.addEventListener("keydown", (event) => {
-        if (event.key === " " || event.key === "Enter") {
-          event.preventDefault();
-          selectMode(mode.id);
-        }
-      });
-      els.modes.appendChild(card);
-    });
-    syncModeSelection();
+  function renderModeDetails() {
+    if (els.modeDetails.hidden) return;
+    const mode = state.modes.find((item) => item.id === state.mode);
+    if (!mode) return;
+    els.modeDetails.innerHTML = `
+      <h3>${esc(mode.name)}</h3>
+      <span class="mode-tagline">${esc(mode.tagline)}</span>
+      <p>${esc(mode.description)}</p>
+      <div class="mode-chips">${mode.stems.map((s) => `<span class="chip">${esc(s)}</span>`).join("")}</div>
+      <span class="mode-model">${esc(mode.model)} · 24-bit WAV</span>
+    `;
   }
 
   function selectMode(modeId) {
     state.mode = modeId;
-    syncModeSelection();
-    updateEnginePill();
+    syncModeTabs();
+    renderModeDetails();
   }
 
-  function syncModeSelection() {
-    els.modes.querySelectorAll(".mode-card").forEach((card) => {
-      card.setAttribute("aria-checked", card.dataset.mode === state.mode ? "true" : "false");
-      card.tabIndex = card.dataset.mode === state.mode ? 0 : -1;
+  function syncModeTabs() {
+    els.modeTabs.querySelectorAll(".tab").forEach((tab) => {
+      const on = tab.dataset.mode === state.mode;
+      tab.setAttribute("aria-selected", String(on));
+      tab.tabIndex = on ? 0 : -1;
     });
+  }
+
+  /* -------------------------------------------------------------- quality */
+
+  function savedQuality() {
+    try {
+      const value = localStorage.getItem("hrc.quality");
+      return value && state.qualities.some((item) => item.id === value) ? value : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function renderQuality() {
+    els.quality.innerHTML = "";
+    if (!state.qualities.length) {
+      els.quality.innerHTML = '<span class="muted small">no presets</span>';
+      return;
+    }
+    state.qualities.forEach((item) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "seg-btn";
+      button.dataset.quality = item.id;
+      button.setAttribute("role", "radio");
+      button.textContent = item.name;
+      button.title = `${item.name} · ${item.tagline} — ${item.description}`;
+      button.addEventListener("click", () => selectQuality(item.id));
+      els.quality.appendChild(button);
+    });
+    syncQuality();
+  }
+
+  function selectQuality(id) {
+    state.quality = id;
+    try {
+      localStorage.setItem("hrc.quality", id);
+    } catch {
+      /* private mode */
+    }
+    selectQualityOnly(id);
+  }
+
+  function selectQualityOnly(id) {
+    syncQuality();
+    renderModeDetails();
+  }
+
+  function syncQuality() {
+    els.quality.querySelectorAll("[data-quality]").forEach((button) => {
+      const on = button.dataset.quality === state.quality;
+      button.classList.toggle("is-on", on);
+      button.setAttribute("aria-checked", String(on));
+      button.tabIndex = on ? 0 : -1;
+    });
+  }
+
+  /* ----------------------------------------------------------- source tabs */
+
+  function selectSource(kind) {
+    if (kind === "youtube" && !state.linksEnabled) return;
+    state.source = kind;
+    els.tabUpload.classList.toggle("is-on", kind === "upload");
+    els.tabYoutube.classList.toggle("is-on", kind === "youtube");
+    els.tabUpload.setAttribute("aria-selected", String(kind === "upload"));
+    els.tabYoutube.setAttribute("aria-selected", String(kind === "youtube"));
+    els.srcUpload.hidden = kind !== "upload";
+    els.srcYoutube.hidden = kind !== "youtube";
+    if (kind === "youtube") els.urlInput.focus();
+  }
+
+  function setUrlHint(message, kind = "info") {
+    els.urlHint.textContent = message;
+    els.urlHint.dataset.kind = kind;
+    els.urlInput.classList.toggle("is-bad", kind === "warn");
   }
 
   /* ------------------------------------------------------------- dropzone */
@@ -326,9 +487,24 @@
       if (file) handleFile(file);
     });
 
-    // Dragging anywhere else should not navigate away from the app.
     window.addEventListener("dragover", (event) => event.preventDefault());
     window.addEventListener("drop", (event) => event.preventDefault());
+  }
+
+  function beginJob(title, note) {
+    state.busy = true;
+    els.dropzone.classList.add("busy");
+    showError("");
+    showPane("source");
+    showLoader(true);
+    setProgress(0);
+    els.stageBadge.textContent = "Upload";
+    els.cancelBtn.disabled = false;
+    setText(els.progressTitle, title);
+    setText(els.progressFile, note || "");
+    els.pipeline.hidden = true;
+    els.pipeline.innerHTML = "";
+    startElapsedTimer();
   }
 
   async function handleFile(file) {
@@ -337,44 +513,21 @@
       showError("That file is empty.");
       return;
     }
-
-    disposeStudio();
-    state.busy = true;
-    els.dropzone.classList.add("busy");
-    els.studio.hidden = true;
-    showError("");
-    els.progressPanel.hidden = false;
-    els.bar.classList.add("running");
-    els.barFill.style.width = "0%";
-    els.pct.textContent = "0%";
-    els.eta.textContent = "uploading…";
-    els.pipeline.hidden = true;
-    els.pipeline.innerHTML = "";
-    els.progressTitle.textContent = "Uploading…";
-    els.progressFile.textContent = `${file.name} · ${fmtBytes(file.size)}`;
-    els.stageBadge.textContent = "Upload";
-    els.cancelBtn.disabled = false;
-    startElapsedTimer();
+    beginJob("Uploading…", `${file.name} · ${fmtBytes(file.size)}`);
 
     try {
-      const created = await uploadFile(file, (fraction) => {
-        const pct = Math.round(fraction * 100);
-        els.barFill.style.width = `${Math.min(100, pct)}%`;
-        els.pct.textContent = `${pct}%`;
-        els.bar.setAttribute("aria-valuenow", String(pct));
-      });
+      const created = await uploadFile(file, (fraction) => setProgress(fraction * 0.5));
       state.job = created;
-      els.progressTitle.textContent = "Separating…";
-      els.eta.textContent = "estimating…";
+      setText(els.progressTitle, "Separating…");
+      setText(els.eta, "estimating…");
       poll();
     } catch (err) {
       state.busy = false;
       els.dropzone.classList.remove("busy");
-      els.bar.classList.remove("running");
-      els.progressPanel.hidden = false;
-      els.progressTitle.textContent = "Upload failed";
+      els.progressPanel.classList.remove("is-running");
+      setText(els.progressTitle, "Upload failed");
       els.stageBadge.textContent = "Error";
-      els.eta.textContent = "—";
+      setText(els.eta, "—");
       showError(err.message);
       stopElapsedTimer();
     }
@@ -385,6 +538,7 @@
       const form = new FormData();
       form.append("file", file, file.name);
       form.append("mode", state.mode);
+      form.append("quality", state.quality);
 
       const xhr = new XMLHttpRequest();
       state.uploadAbort = xhr;
@@ -422,6 +576,50 @@
 
       xhr.send(form);
     });
+  }
+
+  /* --------------------------------------------------------- fetch a link */
+
+  async function submitLink() {
+    if (state.busy) return;
+    const url = els.urlInput.value.trim();
+    if (!url) {
+      setUrlHint("Paste a link first.", "warn");
+      els.urlInput.focus();
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      setUrlHint("Links must start with http:// or https://", "warn");
+      els.urlInput.focus();
+      return;
+    }
+
+    setUrlHint("Fetching the audio…", "info");
+    beginJob("Fetching audio…", url.replace(/^https?:\/\//, ""));
+    els.stageBadge.textContent = "Fetch";
+    els.urlSubmit.disabled = true;
+
+    try {
+      const job = await api("/api/jobs/from-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, mode: state.mode, quality: state.quality }),
+      });
+      state.job = job;
+      setText(els.progressTitle, "Fetching & separating…");
+      poll();
+      return;
+    } catch (err) {
+      state.busy = false;
+      els.progressPanel.classList.remove("is-running");
+      setText(els.progressTitle, "Could not queue that link");
+      setText(els.eta, "—");
+      showError(err.message);
+      stopElapsedTimer();
+      setUrlHint(err.message, "warn");
+    } finally {
+      els.urlSubmit.disabled = false;
+    }
   }
 
   /* -------------------------------------------------------------- polling */
@@ -465,28 +663,21 @@
   }
 
   function renderProgress(job) {
-    const pct = Math.round((job.progress || 0) * 100);
-    els.barFill.style.width = `${pct}%`;
-    els.pct.textContent = `${pct}%`;
+    setProgress(job.progress || 0);
     els.stageBadge.textContent = job.stage || job.status;
-    els.bar.setAttribute("aria-valuenow", String(pct));
-    els.progressFile.textContent =
-      `${job.filename} · ${fmtBytes(job.size)}` +
-      (job.duration ? ` · ${fmtTime(job.duration)} of audio` : "") +
-      ` · ${job.mode_name}`;
+    const bits = [`${job.filename} · ${fmtBytes(job.size)}`];
+    if (job.duration) bits.push(`${fmtTime(job.duration)} of audio`);
+    bits.push(`${job.mode_name}`);
+    if (job.quality_name) bits.push(`${job.quality_name} quality`);
+    setText(els.progressFile, bits.join(" · "));
 
-    if (job.status === "running" || job.status === "queued") {
-      // Trust the server clock between polls so reopening a running job shows
-      // the real elapsed time instead of restarting from zero.
-      syncElapsed(job.elapsed || 0);
-    }
+    if (job.status === "running" || job.status === "queued") syncElapsed(job.elapsed || 0);
 
     if (job.status === "running") {
-      els.bar.classList.add("running");
-      els.eta.textContent =
-        job.eta_seconds != null ? `≈ ${fmtTime(job.eta_seconds)} left` : "estimating…";
+      els.progressPanel.classList.add("is-running");
+      setText(els.eta, job.eta_seconds != null ? `≈ ${fmtTime(job.eta_seconds)} left` : "estimating…");
     } else if (job.status === "queued") {
-      els.eta.textContent = "waiting for the worker";
+      setText(els.eta, "waiting for the worker");
     }
 
     renderPipeline(job.pipeline || []);
@@ -502,7 +693,9 @@
     els.pipeline.innerHTML = steps
       .map((step) => {
         const time =
-          step.seconds != null && step.seconds >= 0.15 ? `<span class="step-time">${fmtDuration(step.seconds)}</span>` : "";
+          step.seconds != null && step.seconds >= 0.15
+            ? `<span class="step-time">${fmtDuration(step.seconds)}</span>`
+            : "";
         return `
           <li class="step" data-state="${esc(step.state)}">
             <span class="step-mark" aria-hidden="true"></span>
@@ -518,14 +711,14 @@
     syncElapsed(initial);
     state.elapsedTimer = setInterval(() => {
       const seconds = state.elapsedBase + (Date.now() - state.elapsedStamp) / 1000;
-      els.elapsed.textContent = `${fmtTime(seconds)} elapsed`;
+      setText(els.elapsed, `${fmtTime(seconds)} elapsed`);
     }, 500);
   }
 
   function syncElapsed(seconds) {
     state.elapsedBase = Math.max(0, seconds || 0);
     state.elapsedStamp = Date.now();
-    els.elapsed.textContent = `${fmtTime(state.elapsedBase)} elapsed`;
+    setText(els.elapsed, `${fmtTime(state.elapsedBase)} elapsed`);
   }
 
   function stopElapsedTimer() {
@@ -533,17 +726,17 @@
     state.elapsedTimer = null;
   }
 
-  /* ========================================================== practice studio */
+  /* --------------------------------------------------------- studio shell */
 
   const isStudioOpen = () => Boolean(state.job && state.job.status === "done" && !els.studio.hidden);
 
   function finishSuccess(job) {
     state.busy = false;
     els.dropzone.classList.remove("busy");
-    els.bar.classList.remove("running");
-    els.progressPanel.hidden = true;
-    els.errorBox.hidden = true;
-    els.studio.hidden = false;
+    els.progressPanel.classList.remove("is-running");
+    showLoader(false);
+    showError("");
+    showPane("studio");
 
     const count = job.stems.length;
     const first = job.stems[0] || {};
@@ -551,14 +744,13 @@
     const rate = (first.sample_rate || 44100) / 1000;
     mixer.format = `${depth}-bit · ${rate.toFixed(1)} kHz`;
     els.resultsMeta.textContent =
-      `${job.filename} · ${job.mode_name} · ${count} stem${count === 1 ? "" : "s"} · ` +
-      `${depth}-bit / ${rate.toFixed(1)} kHz WAV · ${fmtTime(job.duration)} · ` +
-      `separated in ${fmtTime(job.elapsed)}`;
+      `${job.filename} · ${count} stem${count === 1 ? "" : "s"} · ` +
+      `${depth}-bit ${rate.toFixed(1)} kHz · ${job.quality_name || "Studio"} · ` +
+      `${fmtTime(job.duration)} · ready in ${fmtTime(job.elapsed)}`;
 
     renderStudio(job);
     loadHistory();
 
-    // Keep the address bar shareable/reloadable for this result.
     const url = new URL(window.location.href);
     url.searchParams.set("job", job.id);
     window.history.replaceState({}, "", url);
@@ -567,10 +759,12 @@
   function finishError(job) {
     state.busy = false;
     els.dropzone.classList.remove("busy");
-    els.bar.classList.remove("running");
-    els.progressTitle.textContent = "Separation failed";
+    els.progressPanel.classList.remove("is-running");
+    showPane("source");
+    showLoader(true);
+    setText(els.progressTitle, "Separation failed");
     els.stageBadge.textContent = "Error";
-    els.eta.textContent = "—";
+    setText(els.eta, "—");
     showError(job.error || "Unknown error.");
     loadHistory();
   }
@@ -578,8 +772,9 @@
   function finishCancelled() {
     state.busy = false;
     els.dropzone.classList.remove("busy");
-    els.bar.classList.remove("running");
-    els.progressPanel.hidden = true;
+    els.progressPanel.classList.remove("is-running");
+    showPane("source");
+    showLoader(false);
     showError("");
     loadHistory();
   }
@@ -948,13 +1143,15 @@
         dimCtx.textBaseline = "bottom";
         const endLabel = fmtTime(dur);
         const endWidth = dimCtx.measureText(endLabel).width;
+        const endX = w - endWidth - 4;
         for (let t = 0; t <= dur + 0.001; t += step) {
           const x = (t / dur) * w;
           dimCtx.fillStyle = "rgba(255, 255, 255, 0.05)";
           dimCtx.fillRect(Math.round(x), 0, 1, h);
-          if (x + endWidth + 14 > w) continue;
+          const label = fmtTime(t);
+          if (x + dimCtx.measureText(label).width + 3 > endX - 10) continue;
           dimCtx.fillStyle = "rgba(139, 151, 169, 0.7)";
-          dimCtx.fillText(fmtTime(t), x + 3, h - 4);
+          dimCtx.fillText(label, x + 3, h - 4);
         }
         dimCtx.fillStyle = "rgba(139, 151, 169, 0.85)";
         dimCtx.fillText(endLabel, w - endWidth - 4, h - 4);
@@ -1003,10 +1200,6 @@
     updateReadout(time, dur);
     updateMeters();
   }
-
-  const setText = (el, value) => {
-    if (el && el.textContent !== value) el.textContent = value;
-  };
 
   function updateReadout(time, dur) {
     setText(els.timeCur, fmtClock(time));
@@ -1497,43 +1690,48 @@
     }
   }
 
-  /* -------------------------------------------------------------- history */
+  /* -------------------------------------------------------------- recent */
 
   async function loadHistory() {
     try {
-      const payload = await api("/api/jobs?limit=8");
-      const jobs = payload.jobs.filter((job) => job.status !== "queued").slice(0, 6);
-      if (!jobs.length) {
-        els.historyPanel.hidden = true;
-        return;
-      }
-      els.historyPanel.hidden = false;
+      const payload = await api("/api/jobs?limit=12");
+      const jobs = payload.jobs.filter((job) => job.status !== "queued");
+      setText(els.recentCount, String(jobs.length));
       els.history.innerHTML = "";
+      els.recentEmpty.hidden = jobs.length > 0;
       jobs.forEach((job) => {
         const item = document.createElement("li");
         const stamp = new Date(job.created_at * 1000);
         item.innerHTML = `
           <span class="h-status ${esc(job.status)}">${esc(job.status)}</span>
-          <span class="h-name">${esc(job.filename)}</span>
-          <span class="h-tag">${esc(job.mode_name)} · ${stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+          <span class="h-name" title="${esc(job.filename)}">${esc(job.filename)}</span>
+          <span class="h-tag">${stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
         `;
         if (job.status === "done" && job.stems.length) {
           const open = document.createElement("button");
           open.type = "button";
           open.className = "btn ghost small";
           open.textContent = "Open";
-          open.addEventListener("click", () => {
-            state.job = job;
-            state.busy = false;
-            finishSuccess(job);
-            window.scrollTo({ top: els.studio.offsetTop - 90, behavior: "smooth" });
+          open.addEventListener("click", async () => {
+            closePopovers();
+            try {
+              const full = await api(`/api/jobs/${job.id}`);
+              state.job = full;
+              state.mode = full.mode;
+              if (full.quality) state.quality = full.quality;
+              syncModeTabs();
+              syncQuality();
+              finishSuccess(full);
+            } catch (err) {
+              showError(err.message);
+            }
           });
           item.appendChild(open);
         }
         els.history.appendChild(item);
       });
     } catch {
-      els.historyPanel.hidden = true;
+      els.recentEmpty.hidden = false;
     }
   }
 
@@ -1561,19 +1759,45 @@
     disposeStudio();
     state.job = null;
     state.busy = false;
-    els.studio.hidden = true;
-    els.progressPanel.hidden = true;
+    showPane("source");
+    showLoader(false);
     showError("");
+    setUrlHint("Any public video or audio link, up to 20 minutes.", "info");
     els.dropzone.classList.remove("busy");
     const url = new URL(window.location.href);
     url.searchParams.delete("job");
     window.history.replaceState({}, "", url);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   /* ------------------------------------------------------------------ init */
 
   initDropzone();
+  selectSource("upload");
+  els.tabUpload.addEventListener("click", () => selectSource("upload"));
+  els.tabYoutube.addEventListener("click", () => selectSource("youtube"));
+  els.srcYoutube.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitLink();
+  });
+  els.modeExpand.addEventListener("click", () => {
+    const open = togglePopover(els.modeDetails, els.modeExpand);
+    if (open) {
+      togglePopover(els.recentMenu, els.recentBtn, false);
+      renderModeDetails();
+    }
+  });
+  els.modeDetails.addEventListener("click", (event) => {
+    // keep the panel open when it is clicked
+    event.stopPropagation();
+  });
+  els.recentBtn.addEventListener("click", () => {
+    const open = togglePopover(els.recentMenu, els.recentBtn);
+    if (open) {
+      togglePopover(els.modeDetails, els.modeExpand, false);
+      loadHistory();
+    }
+  });
+  els.recentRefresh.addEventListener("click", loadHistory);
   els.cancelBtn.addEventListener("click", cancel);
   els.newTrack.addEventListener("click", resetForNewTrack);
   els.bounceBtn.addEventListener("click", bounceMix);
