@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>STEM — Studio Audio Stem Extractor</title>
+<meta name="description" content="Split any track into lossless 24-bit WAV stems: vocals, instrumental, drums, bass, guitar, piano." />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M4 14v-4M8 18V6M12 16V8M16 19V5M20 13v-2" />
+      </svg>
+    </span>
+    <span class="brand-text">
+      <strong>STEM</strong>
+      <em>studio stem extraction</em>
+    </span>
+  </div>
+  <div class="topbar-meta">
+    <span class="pill" id="engine-pill">BS-RoFormer · 24-bit</span>
+    <span class="pill ghost" id="ffmpeg-pill">checking ffmpeg…</span>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>Split a track into <span class="grad">studio stems</span></h1>
+    <p class="lede">
+      Drop an audio file and get lossless 24-bit WAV. Two-stem vocal isolation with
+      BS-RoFormer, or a full six-piece band split with HTDemucs.
+    </p>
+  </section>
+
+  <!-- ---------------------------------------------------------------- mode -->
+  <section class="panel" aria-labelledby="mode-heading">
+    <h2 id="mode-heading" class="panel-title">1 · Choose a mode</h2>
+    <div class="modes" id="modes" role="radiogroup" aria-label="Separation mode">
+      <p class="muted">Loading modes…</p>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- drop -->
+  <section class="panel" aria-labelledby="drop-heading">
+    <h2 id="drop-heading" class="panel-title">2 · Add audio</h2>
+    <div class="dropzone" id="dropzone" tabindex="0" role="button"
+         aria-describedby="drop-hint">
+      <input type="file" id="file-input" accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg,.opus,.aiff,.wma,.mp4,.webm" hidden />
+      <div class="dropzone-inner">
+        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" />
+          <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+        </svg>
+        <p class="drop-title">Drop your track here</p>
+        <p class="drop-hint" id="drop-hint">or click to browse — WAV, FLAC, MP3, M4A, OGG, AIFF up to 500 MB</p>
+      </div>
+      <div class="drop-flash" aria-hidden="true"></div>
+    </div>
+    <p class="muted small" id="upload-note"></p>
+  </section>
+
+  <!-- ------------------------------------------------------------- progress -->
+  <section class="panel" id="progress-panel" hidden aria-live="polite">
+    <div class="progress-head">
+      <div>
+        <h2 class="panel-title" id="progress-title">Separating…</h2>
+        <p class="muted small" id="progress-file"></p>
+      </div>
+      <span class="stage-badge" id="stage-badge">Starting</span>
+    </div>
+    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar">
+      <div class="bar-fill" id="bar-fill"></div>
+      <div class="bar-shimmer" aria-hidden="true"></div>
+    </div>
+    <div class="progress-foot">
+      <span id="progress-pct">0%</span>
+      <span id="progress-elapsed">0:00 elapsed</span>
+      <button class="btn ghost small" id="cancel-btn" type="button">Cancel</button>
+    </div>
+    <p class="error" id="error-box" hidden></p>
+  </section>
+
+  <!-- ------------------------------------------------------------- results -->
+  <section class="panel" id="results-panel" hidden>
+    <div class="progress-head">
+      <div>
+        <h2 class="panel-title">Stems</h2>
+        <p class="muted small" id="results-meta"></p>
+      </div>
+      <div class="results-actions">
+        <button class="btn" id="download-all" type="button">Download all WAVs</button>
+        <button class="btn ghost" id="new-track" type="button">New track</button>
+      </div>
+    </div>
+    <div class="stems" id="stems"></div>
+  </section>
+
+  <!-- -------------------------------------------------------------- history -->
+  <section class="panel" id="history-panel" hidden>
+    <h2 class="panel-title">Recent sessions</h2>
+    <ul class="history" id="history"></ul>
+  </section>
+
+  <footer class="foot">
+    <span>Local-first: audio never leaves this machine.</span>
+    <span class="dot">·</span>
+    <span id="foot-engine">audio-separator</span>
+    <span class="dot">·</span>
+    <span>24-bit PCM WAV output</span>
+  </footer>
+</main>
+
+<script src="/static/app.js" defer></script>
+</body>
+</html>

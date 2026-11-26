@@ -1,0 +1,14 @@
+# --- web layer -------------------------------------------------------------
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+python-multipart>=0.0.9          # multipart/form-data uploads
+
+# --- separation engine -----------------------------------------------------
+# BS-RoFormer (2stem) and HTDemucs (6stem) are PyTorch models; the `cpu` extra
+# adds onnxruntime for the ONNX-based UVR models. Swap for `[gpu]` on NVIDIA.
+# This dependency also brings torch (>=2.3) and torchaudio.
+audio-separator[cpu]>=0.48.0,<0.50
+
+# --- audio I/O -------------------------------------------------------------
+soundfile>=0.12.1                # 24-bit PCM WAV verification and writing
+numpy>=1.26                      # waveform peak computation
