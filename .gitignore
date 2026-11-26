@@ -6,3 +6,9 @@ work/
 separated/
 install.log
 .DS_Store
+.shots/
+*.log
+nohup.out
+*.part
+.download/
+.pytest_cache/
